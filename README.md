@@ -484,8 +484,9 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 本项目基于以下开源项目和思路开发，特此致谢：
 
 - **[ddcat666/business-gemini-pool](https://github.com/ddcat666/business-gemini-pool)** - 原始项目，提供了项目思路和核心代码
-- **[ddCat](https://linux.do/u/ddcat)** - 提供了 Gemini Enterprise 2 API 关键 JWT 加密 key 以及流程思路
+- **[beings](https://linux.do/u/beings)** - 提供了 Gemini Enterprise 2 API 关键 JWT 加密 key 以及流程思路
   - [Gemini Enterprise 2api 关键jwt加密key以及流程](https://linux.do/t/topic/1223671)
+- **[lckwei](https://linux.do/u/lckwei)** - 提供了 gemini business 2api 简单版实现
   - [gemini business 2api简单版](https://linux.do/t/topic/1225005)
 - **[Gemini-Link-System](https://github.com/qxd-ljy/Gemini-Link-System)** - 一个将 Gemini Business API 转换为 OpenAI 兼容接口的网关服务
 
