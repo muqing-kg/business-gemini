@@ -108,20 +108,30 @@ docker --version
 docker-compose --version
 ```
 
-#### 2. 构建和启动
+#### 2. 克隆项目
+
+```bash
+# 克隆远程仓库
+git clone https://github.com/muqing-wx/business-gemini.git
+
+# 进入项目目录
+cd business-gemini
+```
+
+#### 3. 构建和启动
 
 ```bash
 # 构建镜像并启动服务
-docker-compose up -d
+docker compose up -d
 
 # 查看日志
-docker-compose logs -f
+docker compose logs -f
 
 # 停止服务
-docker-compose down
+docker compose down
 
 # 重新构建镜像（代码更新后）
-docker-compose up -d --build
+docker compose up -d --build
 ```
 
 #### 3. 端口配置
