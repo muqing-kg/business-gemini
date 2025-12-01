@@ -268,64 +268,96 @@ console.log('JavaScript 开始加载...');
                     errorMessage = errorData.error?.message || errorData.error || errorData.message || errorMessage;
                 } catch (e) {
                     // 如果响应不是 JSON（可能是 HTML 错误页面），使用状态文本
-                    errorMessage = `请求失败 (${response.status} ${response.statusText})`;
+                    if (response.status === 504) {
+                        errorMessage = '请求超时（504 Gateway Timeout）。这可能是由于：\n1. 服务器处理时间过长\n2. 网络连接不稳定\n3. 反向代理超时设置过短\n\n请稍后重试，或尝试使用非流式模式。';
+                    } else {
+                        errorMessage = `请求失败 (${response.status} ${response.statusText})`;
+                    }
                 }
                 throw new Error(errorMessage);
             }
 
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
+            let streamEnded = false;
 
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
+            try {
+                while (!streamEnded) {
+                    const { done, value } = await reader.read();
+                    if (done) {
+                        streamEnded = true;
+                        break;
+                    }
 
-                const chunk = decoder.decode(value, { stream: true });
-                const lines = chunk.split('\n');
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split('\n');
 
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        const data = line.slice(6);
-                        if (data === '[DONE]') {
-                            // 流式结束
-                            break;
-                        }
-                        try {
-                            const parsed = JSON.parse(data);
-                            const content = parsed.choices?.[0]?.delta?.content;
-                            if (content) {
-                                // 收到第一个内容时，移除等待动画并创建AI消息气泡
-                                if (!aiMessageId) {
-                                    removeTypingIndicator(typingId);
-                                    aiMessageId = createAIBubble();
-                                }
-                                
-                                // 处理不同类型的 content
-                                if (typeof content === 'string') {
-                                    // 纯文本内容
-                                    fullContent += content;
-                                } else if (typeof content === 'object' && content !== null) {
-                                    // 可能是图片/视频对象格式：{type: "image_url", image_url: {url: "..."}}
-                                    if (content.type === 'image_url' && content.image_url?.url) {
-                                        const imageUrl = content.image_url.url;
-                                        // 将图片URL追加到内容中（换行分隔）
-                                        if (fullContent && !fullContent.endsWith('\n')) {
-                                            fullContent += '\n';
-                                        }
-                                        fullContent += imageUrl + '\n';
-                                    } else {
-                                        // 其他对象类型，转换为字符串
-                                        console.warn('[流式响应] 收到未知的 content 对象:', content);
-                                        fullContent += JSON.stringify(content);
-                                    }
-                                }
-                                
-                                updateAIBubble(aiMessageId, fullContent);
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = line.slice(6);
+                            if (data === '[DONE]') {
+                                // 流式结束
+                                streamEnded = true;
+                                break;
                             }
-                        } catch (e) {
-                            // 忽略解析错误
+                            try {
+                                const parsed = JSON.parse(data);
+                                const content = parsed.choices?.[0]?.delta?.content;
+                                if (content) {
+                                    // 收到第一个内容时，移除等待动画并创建AI消息气泡
+                                    if (!aiMessageId) {
+                                        removeTypingIndicator(typingId);
+                                        aiMessageId = createAIBubble();
+                                    }
+                                    
+                                    // 处理不同类型的 content
+                                    if (typeof content === 'string') {
+                                        // 纯文本内容
+                                        fullContent += content;
+                                    } else if (typeof content === 'object' && content !== null) {
+                                        // 可能是图片/视频对象格式：{type: "image_url", image_url: {url: "..."}}
+                                        if (content.type === 'image_url' && content.image_url?.url) {
+                                            const imageUrl = content.image_url.url;
+                                            // 将图片URL追加到内容中（换行分隔）
+                                            if (fullContent && !fullContent.endsWith('\n')) {
+                                                fullContent += '\n';
+                                            }
+                                            fullContent += imageUrl + '\n';
+                                        } else {
+                                            // 其他对象类型，转换为字符串
+                                            console.warn('[流式响应] 收到未知的 content 对象:', content);
+                                            fullContent += JSON.stringify(content);
+                                        }
+                                    }
+                                    
+                                    updateAIBubble(aiMessageId, fullContent);
+                                }
+                            } catch (e) {
+                                // 忽略解析错误
+                            }
                         }
                     }
+                    
+                    // 如果流已结束，退出外层循环
+                    if (streamEnded) {
+                        break;
+                    }
+                }
+            } catch (error) {
+                // 处理流读取错误
+                console.error('流式响应读取错误:', error);
+                // 如果 reader 已经关闭，忽略错误
+                if (error.message && error.message.includes('already finished')) {
+                    console.warn('流式响应已结束，忽略后续读取尝试');
+                } else {
+                    throw error;
+                }
+            } finally {
+                // 确保释放 reader
+                try {
+                    reader.releaseLock();
+                } catch (e) {
+                    // 忽略释放错误
                 }
             }
 

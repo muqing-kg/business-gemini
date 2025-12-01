@@ -387,9 +387,32 @@ def register_routes(app):
             
             gemini_file_ids = []
             for fid in input_file_ids:
-                gemini_fid = file_manager.get_gemini_file_id(fid)
-                if gemini_fid:
-                    gemini_file_ids.append(gemini_fid)
+                if not fid:
+                    continue
+                
+                # 判断 file_id 格式：
+                # 1. 如果是纯数字（可能是 Gemini 的 fileId），直接使用
+                # 2. 如果是 OpenAI 格式（file-xxx），通过 file_manager 转换
+                # 3. 如果都不是，尝试通过 file_manager 转换（兼容其他格式）
+                if fid.isdigit():
+                    # 纯数字，可能是 Gemini 的 fileId，直接使用
+                    gemini_file_ids.append(fid)
+                elif fid.startswith('file-'):
+                    # OpenAI 格式，通过 file_manager 转换
+                    gemini_fid = file_manager.get_gemini_file_id(fid)
+                    if gemini_fid:
+                        gemini_file_ids.append(gemini_fid)
+                    else:
+                        print(f"[警告] 文件ID {fid} 在文件管理器中未找到，可能已过期或不存在")
+                else:
+                    # 其他格式，尝试通过 file_manager 转换
+                    gemini_fid = file_manager.get_gemini_file_id(fid)
+                    if gemini_fid:
+                        gemini_file_ids.append(gemini_fid)
+                    else:
+                        # 如果转换失败，假设是 Gemini fileId（兼容性处理）
+                        print(f"[警告] 文件ID {fid} 格式未知，尝试直接使用（可能是 Gemini fileId）")
+                        gemini_file_ids.append(fid)
             
             if not user_message and not input_images and not gemini_file_ids:
                 return jsonify({"error": "No user message found"}), 400
@@ -412,8 +435,8 @@ def register_routes(app):
             is_new_conversation = data.get('is_new_conversation', False)
             
             # 如果前端没有传递 conversation_id，则根据消息内容自动生成
-            # 注意：对于其他客户端（如 Cursor），如果没有传递 conversation_id，
-            # 我们使用消息内容 + 时间戳生成唯一 ID，避免相同消息内容导致对话混淆
+            # 注意：对于其他客户端（如 Cursor、Cherry Studio），如果没有传递 conversation_id，
+            # 我们使用第一条用户消息内容生成稳定的 ID，确保同一对话的后续请求使用相同的 ID
             if not conversation_id and messages:
                 user_count = sum(1 for msg in messages if msg.get('role') == 'user')
                 assistant_count = sum(1 for msg in messages if msg.get('role') == 'assistant')
@@ -422,21 +445,27 @@ def register_routes(app):
                 last_is_user = messages and messages[-1].get('role') == 'user'
                 first_user_msg = next((msg for msg in messages if msg.get('role') == 'user'), None)
                 
-                # 判断是否为新对话
-                is_new_conversation = (user_count == 1 and assistant_count == 0) or \
-                                     (total_count <= 2 and last_is_user and assistant_count == 0) or \
-                                     (last_is_user and assistant_count == 0)
+                # 判断是否为新对话：只有第一条用户消息且没有 assistant 回复才是新对话
+                # 如果有多条消息或已有 assistant 回复，说明是继续对话
+                is_new_conversation = (user_count == 1 and assistant_count == 0 and total_count == 1)
                 
                 if first_user_msg:
-                    # 对于新对话，生成唯一 ID（包含时间戳，避免相同消息内容导致 ID 冲突）
-                    if is_new_conversation:
-                        content = str(first_user_msg.get('content', ''))
-                        timestamp = str(int(time.time() * 1000))  # 毫秒时间戳
-                        conversation_id = hashlib.md5((content + timestamp).encode('utf-8')).hexdigest()[:16]
-                    else:
-                        # 对于继续对话，使用消息内容生成 ID（保持向后兼容）
-                        content = str(first_user_msg.get('content', ''))
-                        conversation_id = hashlib.md5(content.encode('utf-8')).hexdigest()[:16]
+                    # 始终使用第一条用户消息内容生成稳定的 ID（不包含时间戳）
+                    # 这样同一对话的后续请求会使用相同的 ID，即使客户端没有传递 conversation_id
+                    content = str(first_user_msg.get('content', ''))
+                    # 如果内容是数组（包含文件等），提取文本部分
+                    if isinstance(first_user_msg.get('content'), list):
+                        text_parts = []
+                        for item in first_user_msg.get('content', []):
+                            if isinstance(item, dict):
+                                if item.get('type') == 'text':
+                                    text_parts.append(str(item.get('text', '')))
+                                elif item.get('type') == 'file':
+                                    # 文件类型也参与ID生成，确保唯一性
+                                    file_id = item.get('file', {}).get('id') or item.get('file_id', '')
+                                    text_parts.append(f"file:{file_id}")
+                        content = '|'.join(text_parts) if text_parts else str(first_user_msg.get('content', ''))
+                    conversation_id = hashlib.md5(content.encode('utf-8')).hexdigest()[:16]
                 
                 if is_new_conversation:
                     print(f"[聊天] 检测到新对话（user={user_count}, assistant={assistant_count}, system={system_count}, total={total_count}），对话ID: {conversation_id}，将创建新的 session")
@@ -531,6 +560,27 @@ def register_routes(app):
                 except AccountRequestError as e:
                     last_error = e
                     error_str = str(e).lower()
+                    
+                    # 检查是否是文件不存在的错误
+                    if "file" in error_str and ("not found" in error_str or "404" in error_str):
+                        # 文件不存在错误，提供更友好的提示
+                        # 尝试从错误消息中提取 fileId（re 模块已在文件顶部导入）
+                        file_id_match = re.search(r'File with ID "([^"]+)"', str(e))
+                        if file_id_match:
+                            file_id = file_id_match.group(1)
+                            error_msg = f"文件不存在或已过期（File ID: {file_id}）。请重新上传文件或使用有效的文件ID。"
+                        else:
+                            error_msg = f"文件不存在或已过期。请重新上传文件。错误详情: {str(e)}"
+                        
+                        # 文件不存在不应该导致账号冷却，直接返回错误
+                        return jsonify({
+                            "error": {
+                                "message": error_msg,
+                                "type": "invalid_request_error",
+                                "code": "file_not_found"
+                            }
+                        }), 400
+                    
                     if "500" in error_str or "internal error" in error_str:
                         cooldown_time = 30
                         if account_idx is not None:
@@ -561,7 +611,7 @@ def register_routes(app):
             # 被动检测方式：不再主动记录配额使用量
             # 配额错误会通过 HTTP 错误码（401, 403, 429）被动检测，并在 raise_for_account_response 中处理
 
-            response_content = build_openai_response_content(chat_response, request.host_url, account_manager, request)
+            response_content = build_openai_response_content(chat_response, request.host_url, account_manager, request, data)
 
             if stream:
                 def generate():
@@ -591,25 +641,27 @@ def register_routes(app):
                                     yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
                         
                         # 然后发送图片/视频部分
+                        # 注意：流式响应中 delta.content 必须是字符串，不能是对象
+                        # 将图片 URL 作为字符串发送，这样兼容性更好（chat_history.html 可以通过正则识别）
                         media_parts = [item for item in response_content if item.get("type") == "image_url"]
                         for media_item in media_parts:
-                            image_chunk = {
-                                "id": chunk_id,
-                                "object": "chat.completion.chunk",
-                                "created": int(time.time()),
-                                "model": requested_model,
-                                "choices": [{
-                                    "index": 0,
-                                    "delta": {
-                                        "content": {
-                                            "type": "image_url",
-                                            "image_url": media_item.get("image_url", {})
-                                        }
-                                    },
-                                    "finish_reason": None
-                                }]
-                            }
-                            yield f"data: {json.dumps(image_chunk, ensure_ascii=False)}\n\n"
+                            image_url = media_item.get("image_url", {}).get("url", "")
+                            if image_url:
+                                # 将图片 URL 作为字符串发送（换行分隔，便于 chat_history.html 识别）
+                                # 使用换行符分隔，这样 chat_history.html 的 parseContentWithMedia 函数可以通过正则识别
+                                image_url_text = f"\n{image_url}\n"
+                                image_chunk = {
+                                    "id": chunk_id,
+                                    "object": "chat.completion.chunk",
+                                    "created": int(time.time()),
+                                    "model": requested_model,
+                                    "choices": [{
+                                        "index": 0,
+                                        "delta": {"content": image_url_text},
+                                        "finish_reason": None
+                                    }]
+                                }
+                                yield f"data: {json.dumps(image_chunk, ensure_ascii=False)}\n\n"
                     else:
                         # 纯文本，分块发送
                         if response_content and response_content.strip():
