@@ -9,7 +9,9 @@ services:
       - "8000:8000"
     volumes:
       - ./geminibusiness.db:/app/geminibusiness.db:rw
-      - ./log:/app/log:rw
+      # 注意：log目录不再从外部挂载，以避免权限问题
+      # 日志文件将存储在容器内部，可以通过 docker logs 命令查看
+      # 例如: docker logs business-gemini-pool
       - ./image:/app/image:rw
       - ./video:/app/video:rw
       # 可选：挂载 .env 文件（推荐）
