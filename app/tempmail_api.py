@@ -25,20 +25,36 @@ class TempMailAPIClient:
         """初始化客户端
         
         Args:
-            tempmail_url: 临时邮箱 URL（包含 JWT token）
+            tempmail_url: 临时邮箱 URL（包含 JWT token 或 mailbox/admin_token 参数）
             worker_url: Worker API 地址（可选，如果不提供则从 tempmail_url 提取）
         """
         self.tempmail_url = tempmail_url
-        self.jwt_token = self._extract_jwt()
+        self.is_custom_api = False  # 标记是否为自定义 API 格式
+        self.mailbox = None
+        self.admin_token = None
         
-        # 优先使用提供的 worker_url，否则从 tempmail_url 提取
-        if worker_url:
-            self.worker_url = worker_url.rstrip('/')
+        # 检查是否为自定义 API 格式（包含 mailbox 和 admin_token 参数）
+        parsed = urlparse(self.tempmail_url)
+        params = parse_qs(parsed.query)
+        if 'mailbox' in params and 'admin_token' in params:
+            self.is_custom_api = True
+            self.mailbox = params['mailbox'][0]
+            self.admin_token = params['admin_token'][0]
+            self.worker_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+            self.jwt_token = None
+            log_print(f"[临时邮箱 API] 使用自定义 API 格式: {self.mailbox}", _level="INFO")
         else:
-            self.worker_url = self._extract_worker_url()
-        
-        if not self.jwt_token:
-            raise ValueError("无法从 URL 中提取 JWT token")
+            # 标准 JWT 格式
+            self.jwt_token = self._extract_jwt()
+            
+            # 优先使用提供的 worker_url，否则从 tempmail_url 提取
+            if worker_url:
+                self.worker_url = worker_url.rstrip('/')
+            else:
+                self.worker_url = self._extract_worker_url()
+            
+            if not self.jwt_token:
+                raise ValueError("无法从 URL 中提取 JWT token")
         
         # 记录已处理的最大邮件 ID（用于重试模式）
         self.last_max_id = 0
@@ -63,7 +79,12 @@ class TempMailAPIClient:
         return f"{parsed.scheme}://{parsed.netloc}"
     
     def get_email_address(self) -> Optional[str]:
-        """从 JWT token 中提取邮箱地址"""
+        """从 JWT token 或自定义 API 参数中提取邮箱地址"""
+        # 如果是自定义 API 格式，直接返回 mailbox 参数
+        if self.is_custom_api and self.mailbox:
+            return self.mailbox
+            
+        # 标准 JWT 格式处理
         if not self.jwt_token:
             return None
         
@@ -97,30 +118,36 @@ class TempMailAPIClient:
             limit: 返回邮件数量限制
             offset: 偏移量（分页）
             keyword: 关键词过滤（可选）
+            address: 邮箱地址（可选）
         
         Returns:
             邮件列表
         """
         try:
-            url = f"{self.worker_url}/api/mails"
-            params = {
-                "limit": limit,
-                "offset": offset
-            }
-            if keyword:
-                params["keyword"] = keyword
-            if address:
-                params["address"] = address
-            
-            headers = {
-                "Authorization": f"Bearer {self.jwt_token}",
-                "Content-Type": "application/json"
-            }
-            
-            # 调试信息（已关闭）
-            # if not hasattr(self, '_debug_logged'):
-            #     log_print(f"[临时邮箱 API] 请求信息:\n  URL: {url}\n  Params: {params}\n  JWT 前20字符: {self.jwt_token[:20]}...")
-            #     self._debug_logged = True
+            if self.is_custom_api:
+                # 使用自定义 API 格式
+                url = self.tempmail_url
+                params = {}
+                headers = {
+                    "Content-Type": "application/json"
+                }
+                log_print(f"[临时邮箱 API] 请求自定义 API: {url}", _level="INFO")
+            else:
+                # 使用标准 API 格式
+                url = f"{self.worker_url}/api/mails"
+                params = {
+                    "limit": limit,
+                    "offset": offset
+                }
+                if keyword:
+                    params["keyword"] = keyword
+                if address:
+                    params["address"] = address
+                
+                headers = {
+                    "Authorization": f"Bearer {self.jwt_token}",
+                    "Content-Type": "application/json"
+                }
             
             response = requests.get(url, headers=headers, params=params, timeout=30)
             

@@ -339,9 +339,17 @@ def get_verification_code_from_tempmail(page, timeout=120, tempmail_url: Optiona
         验证码字符串，如果未找到则返回 None
     """
     # 优先尝试 API 方式
-    if (TEMPMAIL_API_AVAILABLE and 
-        tempmail_url and 
-        'jwt=' in tempmail_url):
+    # 支持标准 JWT 格式（包含 'jwt='）和自定义 API 格式（包含 'mailbox=' 和 'admin_token='）
+    from urllib.parse import urlparse, parse_qs
+    api_available = False
+    if TEMPMAIL_API_AVAILABLE and tempmail_url:
+        parsed = urlparse(tempmail_url)
+        params = parse_qs(parsed.query)
+        # 检查是否为标准 JWT 格式或自定义 API 格式
+        api_available = ('jwt=' in tempmail_url or 
+                        ('mailbox' in params and 'admin_token' in params))
+    
+    if api_available:
         try:
             print("[临时邮箱] 尝试使用 API 方式获取验证码...")
             # 从全局配置中获取 Worker URL（如果存在）
