@@ -1810,8 +1810,15 @@ def main():
             print("\n" + "="*60)
             print("步骤1: 获取临时邮箱")
             print("="*60)
-            email = get_email_from_tempmail(email_page, tempmail_url)
-            
+            # 优先从 tempmail_name 中提取邮箱地址
+            email = None
+            if tempmail_name and "@" in tempmail_name:
+                email = tempmail_name
+                print(f"[登录] ✓ 已从 tempmail_name 获取临时邮箱: {email}")
+            else:
+                # 仅当 tempmail_name 中没有邮箱时，才从页面获取
+                email = get_email_from_tempmail(email_page, tempmail_url)
+                
             if not email:
                 print("\n✗ 无法获取邮箱，退出")
                 return
@@ -2334,7 +2341,15 @@ def _refresh_single_account_internal(account_idx: int, account: dict, headless: 
                 try:
                     # 步骤1：获取临时邮箱
                     print(f"[登录] 正在获取临时邮箱地址...")
-                    email = get_email_from_tempmail(email_page, tempmail_url)
+                    # 优先使用已配置的邮箱名称中的邮箱地址
+                    import re
+                    email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+                    email_matches = re.findall(email_pattern, tempmail_name)
+                    if email_matches:
+                        email = email_matches[0]
+                    else:
+                        # 如果配置中没有找到邮箱地址，再从页面获取
+                        email = get_email_from_tempmail(email_page, tempmail_url)
                     
                     if not email:
                         print(f"[单个账号刷新] ✗ 账号 {account_idx} 无法获取邮箱")
