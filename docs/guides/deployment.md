@@ -112,16 +112,16 @@ docker-compose --version
 
 ```bash
 # 构建镜像并启动服务
-docker-compose up -d
+docker compose up -d
 
 # 查看日志
-docker-compose logs -f
+docker compose logs -f
 
 # 停止服务
 docker-compose down
 
 # 重新构建镜像（代码更新后）
-docker-compose up -d --build
+docker compose up -d --build
 ```
 
 #### 3. 端口配置
@@ -425,4 +425,5 @@ sudo systemctl restart nginx
 - 详细 API 文档请参考 [README.md](../README.md)
 - Web 管理控制台提供完整的配置管理功能
 - 支持配置导入/导出，方便备份和迁移
+
 
