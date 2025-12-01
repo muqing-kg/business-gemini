@@ -1,5 +1,6 @@
 """数据库模型和配置"""
 
+import os
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
@@ -10,8 +11,14 @@ import json
 Base = declarative_base()
 
 # 数据库文件路径
-DB_DIR = Path(__file__).parent.parent
-DB_FILE = DB_DIR / "geminibusiness.db"
+# 优先使用环境变量中的数据库路径配置，否则使用默认路径
+DB_PATH = os.environ.get('DATABASE_PATH')
+if DB_PATH:
+    DB_FILE = Path(DB_PATH)
+else:
+    DB_DIR = Path(__file__).parent.parent
+    DB_DIR.mkdir(exist_ok=True, parents=True)  # 确保数据库目录存在
+    DB_FILE = DB_DIR / "geminibusiness.db"
 DATABASE_URL = f"sqlite:///{DB_FILE}"
 
 engine = create_engine(

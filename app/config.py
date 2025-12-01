@@ -9,11 +9,11 @@ CONFIG_FILE = Path(__file__).parent.parent / "business_gemini_session.json"
 # 图片缓存配置
 IMAGE_CACHE_DIR = Path(__file__).parent.parent / "image"
 IMAGE_CACHE_HOURS = 1  # 图片缓存时间（小时）
-IMAGE_CACHE_DIR.mkdir(exist_ok=True)
+IMAGE_CACHE_DIR.mkdir(exist_ok=True, parents=True)
 
 VIDEO_CACHE_DIR = Path(__file__).parent.parent / "video"
 VIDEO_CACHE_HOURS = 6  # 视频缓存时间（小时）
-VIDEO_CACHE_DIR.mkdir(exist_ok=True)
+VIDEO_CACHE_DIR.mkdir(exist_ok=True, parents=True)
 
 MEDIA_STREAM_CHUNK_SIZE = 65536  # 64KB
 
