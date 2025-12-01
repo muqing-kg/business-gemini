@@ -13,7 +13,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # 安装系统依赖（Playwright 需要）
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 使用国内镜像源加速下载
+RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && apt-get install -y --no-install-recommends \
     wget \
     gnupg \
     ca-certificates \
