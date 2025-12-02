@@ -2,7 +2,7 @@ name: business-gemini-pool
 
 services:
   app:
-    build: .
+    image: muqingw/business-gemini:latest
     container_name: business-gemini-pool
     restart: unless-stopped
     ports:

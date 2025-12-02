@@ -788,9 +788,27 @@ class TempMailAPIClient:
                     except Exception as e:
                         log_print(f"[临时邮箱 API] ⚠ 获取邮件详情失败 (ID {mail_id}): {e}", _level="WARNING")
                 
+                # 提取验证码 (优先从 preview)
+                preview_text = mail.get("preview", "")
+                code = None
+                if preview_text:
+                    log_print(f"[临时邮箱 API] 邮件 ID {mail_id} 的 preview 内容: {preview_text}", _level="DEBUG")
+                    code_from_preview = extract_code_func(preview_text)
+                    log_print(f"[临时邮箱 API] 从 preview 提取的验证码: {code_from_preview}", _level="DEBUG")
+                    if code_from_preview:
+                        code = code_from_preview
+
+                # 如果 preview 中找到验证码，直接返回
+                if code:
+                    actual_wait_time = int(time.time() - start_time)
+                    log_print(f"[临时邮箱 API] ✓ 从邮件 ID {mail_id} 的 preview 中提取到验证码: {code} (等待时间: {actual_wait_time} 秒)")
+                    if mail_id > last_max_id:
+                        last_max_id = mail_id
+                        self.last_max_id = mail_id
+                    return code
+
                 if not mail_text:
                     log_print(f"[临时邮箱 API] ⚠ 邮件 ID {mail_id} (来源: {mail_source}) 无文本内容，可用字段: {list(mail.keys())}", _level="WARNING")
-                    # 在重试模式下，如果邮件没有文本内容，尝试打印更多调试信息
                     if retry_mode:
                         log_print(f"[临时邮箱 API] 调试信息 - 邮件对象: {str(mail)[:500]}", _level="INFO")
                     continue
@@ -804,8 +822,12 @@ class TempMailAPIClient:
                     log_print(f"[临时邮箱 API] 邮件内容对比 - API方式获取的邮件 ID {mail_id} 内容（前500字符）:\n{mail_text[:500]}", _level="INFO")
                     self._content_comparison_logged = True
                 
-                # 提取验证码
-                code = extract_code_func(mail_text)
+                # 从 mail_text 提取验证码
+                log_print(f"[临时邮箱 API] 邮件 ID {mail_id} 的 mail_text 内容（前200字符）: {mail_text[:200]}", _level="DEBUG")
+                code_from_mail_text = extract_code_func(mail_text)
+                log_print(f"[临时邮箱 API] 从 mail_text 提取的验证码: {code_from_mail_text}", _level="DEBUG")
+                if code_from_mail_text:
+                    code = code_from_mail_text
                 
                 if code:
                     # 计算实际等待时间

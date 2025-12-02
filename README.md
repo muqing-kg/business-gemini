@@ -90,6 +90,63 @@ business-gemini-pool-main/
     └── 配置文件说明.md
 ```
 
+## 🐳 Docker 部署
+
+我们提供了 Docker 镜像，方便您快速部署。
+
+1.  **拉取镜像**
+
+    ```bash
+    docker pull muqingw/business-gemini:latest
+    ```
+
+2.  **创建 `docker-compose.yml`**
+
+    创建一个 `docker-compose.yml` 文件，内容如下：
+
+    ```yaml
+    name: business-gemini-pool
+
+    services:
+      app:
+        image: muqingw/business-gemini:latest
+        container_name: business-gemini-pool
+        restart: unless-stopped
+        ports:
+          - "8000:8000"
+        volumes:
+          - ./geminibusiness.db:/app/geminibusiness.db:rw
+          - ./image:/app/image:rw
+          - ./video:/app/video:rw
+        environment:
+          - PYTHONUNBUFFERED=1
+          - SERVER_PORT=8000
+          - SERVER_HOST=0.0.0.0
+          - DATABASE_PATH=/app/geminibusiness.db
+        healthcheck:
+          test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5)"]
+          interval: 30s
+          timeout: 10s
+          retries: 3
+          start_period: 5s
+        networks:
+          - gemini-network
+
+    networks:
+      gemini-network:
+        driver: bridge
+    ```
+
+3.  **启动服务**
+
+    ```bash
+    docker-compose up -d
+    ```
+
+4.  **访问服务**
+
+    在浏览器中打开 `http://localhost:8000` 即可访问管理后台。
+
 ## 📚 使用文档
 
 - [首次使用指南](./docs/guides/getting-started.md) - **新用户必读**：快速开始，无需创建 JSON 文件
