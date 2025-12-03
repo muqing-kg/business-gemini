@@ -62,6 +62,57 @@ def decrypt_api_key(encrypted_key: str) -> Optional[str]:
         return None
 
 
+def import_api_key(api_key: str, name: str, expires_at: Optional[str] = None, description: Optional[str] = None) -> Optional[Dict]:
+    """
+    导入已有的 API 密钥
+    
+    Args:
+        api_key: 原始API密钥
+        name: 密钥名称
+        expires_at: 过期时间ISO格式字符串
+        description: 描述信息
+    
+    Returns:
+        dict: 密钥信息，如果密钥已存在则返回None
+    """
+    db = SessionLocal()
+    try:
+        key_hash = hash_api_key(api_key)
+        # 检查密钥是否已存在
+        existing = db.query(APIKey).filter(APIKey.key_hash == key_hash).first()
+        if existing:
+            return None
+        
+        encrypted_key = encrypt_api_key(api_key)
+        expires_datetime = None
+        if expires_at:
+            try:
+                expires_datetime = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+            except:
+                pass
+        
+        db_key = APIKey(
+            key_hash=key_hash,
+            encrypted_key=encrypted_key,
+            name=name,
+            expires_at=expires_datetime,
+            description=description,
+            is_active=True,
+            usage_count=0
+        )
+        db.add(db_key)
+        db.commit()
+        db.refresh(db_key)
+        
+        return {
+            "id": db_key.id,
+            "name": db_key.name,
+            "key": api_key
+        }
+    finally:
+        db.close()
+
+
 def create_api_key(name: str, expires_days: Optional[int] = None, description: Optional[str] = None) -> Dict:
     """
     创建新的 API 密钥
@@ -184,9 +235,12 @@ def list_api_keys(include_inactive: bool = False) -> List[Dict]:
         
         result = []
         for key in keys:
+            # 解密密钥以便随时查看
+            decrypted_key = decrypt_api_key(key.encrypted_key) if key.encrypted_key else None
             result.append({
                 "id": key.id,
                 "name": key.name,
+                "key": decrypted_key,  # 返回解密后的密钥
                 "created_at": key.created_at.isoformat() if key.created_at else None,
                 "expires_at": key.expires_at.isoformat() if key.expires_at else None,
                 "is_active": key.is_active,

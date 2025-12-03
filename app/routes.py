@@ -1645,6 +1645,8 @@ def register_routes(app):
             account_manager.config["auto_refresh_cookie"] = bool(data["auto_refresh_cookie"])
         if "tempmail_worker_url" in data:
             account_manager.config["tempmail_worker_url"] = data["tempmail_worker_url"] or None
+        if "image_output_mode" in data:
+            account_manager.config["image_output_mode"] = data["image_output_mode"]
         if "log_level" in data:
             try:
                 set_log_level(data["log_level"], persist=True)
@@ -1871,7 +1873,25 @@ def register_routes(app):
             
             account_manager.save_config()
             print(f"[配置导入] 配置导入成功，已保存 {len(account_manager.accounts)} 个账号", _level="INFO")
-            return jsonify({"success": True, "accounts_count": len(account_manager.accounts)})
+            
+            # 导入API密钥
+            api_keys = data.get("api_keys", [])
+            imported_keys = 0
+            if api_keys:
+                from .api_key_manager import import_api_key
+                for key_data in api_keys:
+                    if key_data.get("key"):
+                        result = import_api_key(
+                            api_key=key_data["key"],
+                            name=key_data.get("name", "导入的密钥"),
+                            expires_at=key_data.get("expires_at"),
+                            description=key_data.get("description")
+                        )
+                        if result:
+                            imported_keys += 1
+                print(f"[配置导入] 导入 {imported_keys} 个API密钥", _level="INFO")
+            
+            return jsonify({"success": True, "accounts_count": len(account_manager.accounts), "api_keys_count": imported_keys})
         except Exception as e:
             from .logger import print
             print(f"[配置导入] 导入失败: {e}", _level="ERROR")
@@ -1917,11 +1937,15 @@ def register_routes(app):
     @app.route('/api/config/export', methods=['GET'])
     @require_admin
     def export_config():
-        """导出配置（包含账号信息）"""
+        """导出配置（包含账号信息和API密钥）"""
         config = dict(account_manager.config) if account_manager.config else {}
         # 添加账号信息
         config["accounts"] = account_manager.accounts
         # 移除已废弃的字段
         config.pop("api_tokens", None)  # 已废弃，使用新的 API 密钥管理系统
+        # 添加API密钥
+        from .api_key_manager import list_api_keys
+        api_keys = list_api_keys(include_inactive=False)
+        config["api_keys"] = api_keys
         return jsonify(config)
 

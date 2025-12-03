@@ -251,6 +251,16 @@
                                 <input type="text" class="form-input" id="imageBaseUrl" placeholder="https://cfbed.sanyue.de">
                                 <small>图片访问基础 URL，留空则从上传端点自动推断</small>
                             </div>
+                            <div class="form-group">
+                                <label class="form-label" for="imageOutputMode">图片输出模式</label>
+                                <select class="form-input" id="imageOutputMode">
+                                    <option value="">自动检测（默认）</option>
+                                    <option value="markdown">Markdown (Base64内嵌)</option>
+                                    <option value="array">数组格式</option>
+                                    <option value="url">URL</option>
+                                </select>
+                                <small>强制指定图片输出格式。自动检测会根据客户端类型选择最佳格式；Markdown模式适用于不支持数组格式的客户端</small>
+                            </div>
                             <div style="display: flex; gap: 12px;">
                                 <button type="button" class="btn btn-primary" onclick="saveSettings()">
                                     保存设置

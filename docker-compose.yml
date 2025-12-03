@@ -8,10 +8,6 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./geminibusiness.db:/app/geminibusiness.db:rw
-      # 注意：log目录不再从外部挂载，以避免权限问题
-      # 日志文件将存储在容器内部，可以通过 docker logs 命令查看
-      # 例如: docker logs business-gemini-pool
       - ./image:/app/image:rw
       - ./video:/app/video:rw
       # 可选：挂载 .env 文件（推荐）
@@ -22,7 +18,6 @@ services:
       - PYTHONUNBUFFERED=1
       - SERVER_PORT=8000
       - SERVER_HOST=0.0.0.0
-      # 指定数据库路径为容器内路径，与卷挂载一致
       - DATABASE_PATH=/app/geminibusiness.db
       # 可选：设置 API 密钥加密密钥（32字节，生产环境建议设置）
       # 推荐使用 .env 文件或环境变量文件

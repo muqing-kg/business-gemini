@@ -283,9 +283,13 @@ def stream_chat_with_images(jwt: str, sess_name: str, message: str,
                             )
                             download_resp.raise_for_status()
                             
+                            # 读取文件数据
+                            file_data = download_resp.content
+                            b64_data = base64.b64encode(file_data).decode('utf-8')
+                            
                             # 上传到 cfbed
-                            upload_result = upload_file_streaming_to_cfbed(
-                                file_stream=download_resp,
+                            upload_result = upload_base64_to_cfbed(
+                                base64_data=b64_data,
                                 filename=fname or (f"media_{uuid.uuid4().hex[:8]}{get_extension_for_mime(mime)}"),
                                 mime_type=mime,
                                 endpoint=upload_endpoint,
@@ -307,6 +311,7 @@ def stream_chat_with_images(jwt: str, sess_name: str, message: str,
                             
                             img = ChatImage(
                                 file_id=fid,
+                                base64_data=b64_data,  # 添加 base64 数据
                                 file_name=upload_result["src"].split("/")[-1],  # 只保留文件名
                                 mime_type=mime,
                                 url=full_url,  # 公网 URL
@@ -320,13 +325,18 @@ def stream_chat_with_images(jwt: str, sess_name: str, message: str,
                                 filename = download_file_streaming(jwt, session_path, fid, mime, fname, proxy)
                                 local_path = VIDEO_CACHE_DIR / filename
                                 media_type = "video"
+                                # 读取视频文件转 base64
+                                with open(local_path, 'rb') as f:
+                                    b64_data = base64.b64encode(f.read()).decode('utf-8')
                             else:
                                 image_data = download_file_with_jwt(jwt, session_path, fid, proxy)
                                 filename = save_image_to_cache(image_data, mime, fname)
                                 local_path = IMAGE_CACHE_DIR / filename
                                 media_type = "image"
+                                b64_data = base64.b64encode(image_data).decode('utf-8')
                             img = ChatImage(
                                 file_id=fid,
+                                base64_data=b64_data,  # 添加 base64 数据
                                 file_name=filename,
                                 mime_type=mime,
                                 local_path=str(local_path),
@@ -646,10 +656,11 @@ def get_image_base_url(fallback_host_url: str, account_manager=None, request=Non
     return configured_url
 
 
-def detect_client_image_format(request=None, request_data=None) -> str:
+def detect_client_image_format(request=None, request_data=None, account_manager=None) -> str:
     """检测客户端支持的图片格式
     
     检测优先级：
+    0. 配置中的 image_output_mode（如果设置为 base64，强制使用 markdown）
     1. 请求参数中的 image_format 或 response_format（显式指定）
     2. User-Agent 检测（已知客户端）- 优先于消息格式检测
     3. 检查客户端发送的消息格式（如果发送数组格式，说明支持数组格式）
@@ -658,13 +669,22 @@ def detect_client_image_format(request=None, request_data=None) -> str:
     Args:
         request: Flask request 对象
         request_data: 请求的 JSON 数据
+        account_manager: 账号管理器（用于读取配置）
     
     Returns:
         "array" - 数组格式（OpenAI 标准）
         "markdown" - Markdown 格式
         "url" - 纯 URL 格式
     """
-    # 1. 检查请求参数中的格式偏好（最高优先级）
+    # 0. 检查配置中的 image_output_mode（最高优先级）
+    if account_manager and account_manager.config:
+        mode = account_manager.config.get("image_output_mode", "").lower().strip()
+        if mode == "base64":
+            return "markdown"  # base64 模式使用 markdown 格式返回
+        elif mode in ["array", "markdown", "url"]:
+            return mode
+    
+    # 1. 检查请求参数中的格式偏好
     if request_data:
         image_format = request_data.get('image_format') or request_data.get('response_format')
         if image_format in ['array', 'markdown', 'url']:
@@ -739,7 +759,7 @@ def build_openai_response_content(chat_response: ChatResponse, host_url: str, ac
     result_text = chat_response.text
     
     # 检测客户端支持的图片格式
-    image_format = detect_client_image_format(request, request_data)
+    image_format = detect_client_image_format(request, request_data, account_manager)
     
     # 如果有图片或视频
     if chat_response.images:

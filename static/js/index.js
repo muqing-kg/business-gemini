@@ -1046,6 +1046,7 @@
                 document.getElementById('uploadEndpoint').value = configData.upload_endpoint || '';
                 document.getElementById('uploadApiToken').value = configData.upload_api_token || '';
                 document.getElementById('imageBaseUrl').value = configData.image_base_url || '';
+                document.getElementById('imageOutputMode').value = configData.image_output_mode || '';
                 document.getElementById('tempmailWorkerUrl').value = configData.tempmail_worker_url || '';
                 document.getElementById('autoRefreshCookie').checked = configData.auto_refresh_cookie || false;
                 document.getElementById('configJson').value = JSON.stringify(configData, null, 2);
@@ -1202,6 +1203,10 @@
                                     <span class="status-badge ${statusClass}" style="padding: 2px 8px; border-radius: 12px; font-size: 12px;">${statusText}</span>
                                 </div>
                                 ${key.description ? `<div style="color: var(--text-muted); font-size: 14px; margin-bottom: 8px;">${escapeHtml(key.description)}</div>` : ''}
+                                ${key.key ? `<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding: 8px; background: var(--bg-secondary); border-radius: var(--radius-sm);">
+                                    <code style="flex: 1; font-size: 12px; word-break: break-all; color: var(--text-main);">${escapeHtml(key.key)}</code>
+                                    <button class="btn btn-outline btn-sm" onclick="copyApiKey('${escapeHtml(key.key)}')" title="复制密钥">复制</button>
+                                </div>` : ''}
                                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; font-size: 13px; color: var(--text-muted);">
                                     <div>创建时间: ${createdDate}</div>
                                     <div>过期时间: ${expiresDate}</div>
@@ -1258,11 +1263,11 @@
                 const data = await res.json();
                 if (!res.ok || data.error) throw new Error(data.error || '创建失败');
 
-                // 显示生成的密钥（仅显示一次）
+                // 显示生成的密钥
                 const resultDiv = document.getElementById('newApiKeyResult');
                 resultDiv.innerHTML = `
-                    <div style="padding: 16px; background: var(--warning-light); border: 1px solid var(--warning); border-radius: var(--radius-md); margin-top: 16px;">
-                        <div style="color: var(--warning); font-weight: 600; margin-bottom: 8px;">⚠️ 请立即复制并保存此密钥，它将只显示一次！</div>
+                    <div style="padding: 16px; background: var(--success-light); border: 1px solid var(--success); border-radius: var(--radius-md); margin-top: 16px;">
+                        <div style="color: var(--success); font-weight: 600; margin-bottom: 8px;">✓ API 密钥创建成功</div>
                         <div style="display: flex; gap: 8px; align-items: center;">
                             <code style="flex: 1; padding: 8px; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius-sm); word-break: break-all;">${escapeHtml(data.key)}</code>
                             <button class="btn btn-primary btn-sm" onclick="copyApiKey('${escapeHtml(data.key)}')">复制</button>
@@ -1501,6 +1506,7 @@
                         upload_endpoint: uploadEndpoint,
                         upload_api_token: uploadApiToken,
                         image_base_url: imageBaseUrl,
+                        image_output_mode: document.getElementById('imageOutputMode').value,
                         tempmail_worker_url: tempmailWorkerUrl
                     })
                 });

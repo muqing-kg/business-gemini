@@ -115,7 +115,6 @@ business-gemini-pool-main/
         ports:
           - "8000:8000"
         volumes:
-          - ./geminibusiness.db:/app/geminibusiness.db:rw
           - ./image:/app/image:rw
           - ./video:/app/video:rw
         environment:
