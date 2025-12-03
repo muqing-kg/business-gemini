@@ -76,23 +76,26 @@ def select_tempmail_url(account_config: Optional[Dict] = None) -> tuple[str, Opt
         # 更新索引，下次使用下一个邮箱
         _current_tempmail_index = (_current_tempmail_index + 1) % len(TEMPMAIL_URLS)
     
-    # 从 URL 中提取邮箱名称（如果有 jwt）
+    # 从 URL 中提取邮箱名称（支持 jwt 格式和自定义 API 格式）
     name = None
-    if 'jwt=' in selected_url:
-        try:
-            from urllib.parse import urlparse, parse_qs
-            parsed = urlparse(selected_url)
-            params = parse_qs(parsed.query)
-            if 'jwt' in params:
-                jwt_token = params['jwt'][0]
-                payload = jwt_token.split('.')[1]
-                padding = '=' * (4 - len(payload) % 4)
-                decoded = base64.urlsafe_b64decode(payload + padding)
-                data = json.loads(decoded)
-                if 'address' in data:
-                    name = data['address']
-        except:
-            pass
+    try:
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(selected_url)
+        params = parse_qs(parsed.query)
+        if 'mailbox' in params:
+            # 自定义 API 格式：直接使用 mailbox 参数
+            name = params['mailbox'][0]
+        elif 'jwt' in params:
+            # 标准 JWT 格式：从 JWT 中提取邮箱地址
+            jwt_token = params['jwt'][0]
+            payload = jwt_token.split('.')[1]
+            padding = '=' * (4 - len(payload) % 4)
+            decoded = base64.urlsafe_b64decode(payload + padding)
+            data = json.loads(decoded)
+            if 'address' in data:
+                name = data['address']
+    except:
+        pass
     
     return selected_url, name
 
@@ -173,10 +176,10 @@ def get_email_from_tempmail(page, tempmail_url: str) -> Optional[str]:
     page.goto(tempmail_url, wait_until="networkidle", timeout=60000)
     page.wait_for_timeout(3000)
     
-    # 判断 URL 是否包含 jwt（如果包含，说明已经指定了邮箱，不需要创建新邮箱）
-    is_jwt_url = 'jwt=' in tempmail_url
+    # 判断 URL 是否已指定邮箱（jwt 格式或自定义 API 格式）
+    is_specified_mailbox = 'jwt=' in tempmail_url or ('mailbox=' in tempmail_url and 'admin_token=' in tempmail_url)
     
-    if not is_jwt_url:
+    if not is_specified_mailbox:
         # 如果 URL 不包含 jwt，需要创建新邮箱
         # 切换到"创建新邮箱"标签页
         # 调试日志已关闭
@@ -339,9 +342,10 @@ def get_verification_code_from_tempmail(page, timeout=120, tempmail_url: Optiona
         验证码字符串，如果未找到则返回 None
     """
     # 优先尝试 API 方式
+    # 支持两种格式：标准 JWT 格式（jwt=xxx）和自定义 API 格式（mailbox=xxx&admin_token=xxx）
     if (TEMPMAIL_API_AVAILABLE and 
         tempmail_url and 
-        'jwt=' in tempmail_url):
+        ('jwt=' in tempmail_url or ('mailbox=' in tempmail_url and 'admin_token=' in tempmail_url))):
         try:
             print("[临时邮箱] 尝试使用 API 方式获取验证码...")
             # 从全局配置中获取 Worker URL（如果存在）
