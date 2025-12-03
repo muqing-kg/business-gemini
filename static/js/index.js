@@ -1205,7 +1205,6 @@
                                 ${key.description ? `<div style="color: var(--text-muted); font-size: 14px; margin-bottom: 8px;">${escapeHtml(key.description)}</div>` : ''}
                                 ${key.key ? `<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding: 8px; background: var(--bg-secondary); border-radius: var(--radius-sm);">
                                     <code style="flex: 1; font-size: 12px; word-break: break-all; color: var(--text-main);">${escapeHtml(key.key)}</code>
-                                    <button class="btn btn-outline btn-sm" onclick="copyApiKey('${escapeHtml(key.key)}')" title="复制密钥">复制</button>
                                 </div>` : ''}
                                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; font-size: 13px; color: var(--text-muted);">
                                     <div>创建时间: ${createdDate}</div>
@@ -1215,6 +1214,7 @@
                                 </div>
                             </div>
                             <div style="display: flex; gap: 8px; flex-shrink: 0;">
+                                ${key.key ? `<button class="btn btn-outline btn-sm" onclick="copyApiKey('${escapeHtml(key.key)}')" title="复制密钥">复制</button>` : ''}
                                 <button class="btn btn-outline btn-sm" onclick="viewApiKeyStats(${key.id})" title="查看统计">统计</button>
                                 <button class="btn btn-outline btn-sm" onclick="viewApiKeyLogs(${key.id})" title="查看日志">日志</button>
                                 ${key.is_active ? `<button class="btn btn-warning btn-sm" onclick="revokeApiKey(${key.id})" title="撤销密钥">撤销</button>` : ''}

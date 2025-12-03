@@ -33,16 +33,16 @@ class TempMailAPIClient:
         self.mailbox = None
         self.admin_token = None
         
-        # 检查是否为自定义 API 格式（包含 mailbox 和 admin_token 参数）
+        # 检查是否为自定义 API 格式（包含 admin_token 参数即可，mailbox 可为空）
         parsed = urlparse(self.tempmail_url)
         params = parse_qs(parsed.query)
-        if 'mailbox' in params and 'admin_token' in params:
+        if 'admin_token' in params and params['admin_token'][0]:
             self.is_custom_api = True
-            self.mailbox = params['mailbox'][0]
+            self.mailbox = params.get('mailbox', [''])[0] or None  # 空字符串转为 None
             self.admin_token = params['admin_token'][0]
-            self.worker_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+            self.worker_url = f"{parsed.scheme}://{parsed.netloc}"
             self.jwt_token = None
-            log_print(f"[临时邮箱 API] 使用自定义 API 格式: {self.mailbox}", _level="INFO")
+            log_print(f"[临时邮箱 API] 使用自定义 API 格式, mailbox: {self.mailbox or '待生成'}", _level="INFO")
         else:
             # 标准 JWT 格式
             self.jwt_token = self._extract_jwt()
@@ -103,6 +103,65 @@ class TempMailAPIClient:
         except Exception as e:
             log_print(f"[临时邮箱 API] 从 JWT 提取邮箱失败: {e}", _level="WARNING")
         
+        return None
+    
+    def generate_email(self) -> Optional[str]:
+        """通过 API 生成新的临时邮箱（带重试机制）
+        
+        Returns:
+            生成的邮箱地址，失败返回 None
+        """
+        import time
+        
+        url = f"{self.worker_url}/api/generate"
+        headers = {"Content-Type": "application/json"}
+        
+        if self.admin_token:
+            headers["X-Admin-Token"] = self.admin_token
+        elif self.jwt_token:
+            headers["Authorization"] = f"Bearer {self.jwt_token}"
+        
+        # 最多重试2轮（首次请求 + 1次重试）
+        for api_attempt in range(2):
+            try:
+                log_print(f"[临时邮箱 API] 请求生成新邮箱 (第{api_attempt + 1}次): {url}", _level="INFO")
+                response = requests.get(url, headers=headers, timeout=30)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    email = data.get("email")
+                    if email:
+                        log_print(f"[临时邮箱 API] 成功生成新邮箱: {email}", _level="INFO")
+                        self.mailbox = email
+                        self.is_custom_api = True
+                        return email
+                    
+                    # 响应成功但没有email，间隔5秒查看3次
+                    log_print(f"[临时邮箱 API] 响应中无邮箱，开始轮询检查...", _level="INFO")
+                    for poll_attempt in range(3):
+                        time.sleep(5)
+                        log_print(f"[临时邮箱 API] 轮询检查 ({poll_attempt + 1}/3)...", _level="INFO")
+                        poll_response = requests.get(url, headers=headers, timeout=30)
+                        if poll_response.status_code == 200:
+                            poll_data = poll_response.json()
+                            email = poll_data.get("email")
+                            if email:
+                                log_print(f"[临时邮箱 API] 轮询成功获取邮箱: {email}", _level="INFO")
+                                self.mailbox = email
+                                self.is_custom_api = True
+                                return email
+                    
+                    log_print(f"[临时邮箱 API] 轮询3次后仍无邮箱，准备重试API请求", _level="WARNING")
+                else:
+                    log_print(f"[临时邮箱 API] 生成邮箱失败: HTTP {response.status_code}, {response.text[:200]}", _level="WARNING")
+            except Exception as e:
+                log_print(f"[临时邮箱 API] 生成邮箱异常: {e}", _level="WARNING")
+            
+            if api_attempt == 0:
+                log_print(f"[临时邮箱 API] 首次请求失败，5秒后重试...", _level="INFO")
+                time.sleep(5)
+        
+        log_print(f"[临时邮箱 API] 所有重试均失败", _level="WARNING")
         return None
     
     def get_mails(

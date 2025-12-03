@@ -11,6 +11,7 @@ import random
 from pathlib import Path
 from typing import Optional, Dict
 from urllib.parse import urlparse
+from app.logger import print as log_print
 
 # 注意：这个脚本需要使用 chrome-mcp 工具
 # 由于无法直接调用 chrome-mcp，这里提供使用 Playwright 的实现
@@ -169,18 +170,47 @@ def extract_verification_code(text: str) -> Optional[str]:
     print("[临时邮箱] 未能从邮件文本中提取验证码")
     return None
 
-def get_email_from_tempmail(page, tempmail_url: str) -> Optional[str]:
-    """从临时邮箱服务获取邮箱地址"""
+def get_email_from_tempmail(page, tempmail_url: str) -> tuple:
+    """从临时邮箱服务获取邮箱地址
+    
+    Returns:
+        tuple: (email, new_tempmail_url) - 邮箱地址和新的tempmail_url（如果创建了新邮箱）
+               如果未创建新邮箱，new_tempmail_url为None
+    """
     # 调试日志已关闭
     # print("[临时邮箱] 正在访问临时邮箱网站...")
     page.goto(tempmail_url, wait_until="networkidle", timeout=60000)
     page.wait_for_timeout(3000)
     
-    # 判断 URL 是否已指定邮箱（jwt 格式或自定义 API 格式）
-    is_specified_mailbox = 'jwt=' in tempmail_url or ('mailbox=' in tempmail_url and 'admin_token=' in tempmail_url)
+    new_tempmail_url = None  # 用于存储新创建邮箱的URL
+    
+    # 判断 URL 是否已指定邮箱（jwt 格式或自定义 API 格式，且mailbox不为空）
+    from urllib.parse import urlparse, parse_qs
+    parsed_url = urlparse(tempmail_url)
+    url_params = parse_qs(parsed_url.query)
+    mailbox_value = url_params.get('mailbox', [''])[0]
+    is_specified_mailbox = 'jwt=' in tempmail_url or ('mailbox=' in tempmail_url and 'admin_token=' in tempmail_url and mailbox_value)
     
     if not is_specified_mailbox:
         # 如果 URL 不包含 jwt，需要创建新邮箱
+        # 优先尝试 API 方式创建邮箱
+        try:
+            from app.tempmail_api import TempMailAPIClient
+            from urllib.parse import urlparse, urlencode
+            api_client = TempMailAPIClient(tempmail_url)
+            api_email = api_client.generate_email()
+            if api_email:
+                log_print(f"[临时邮箱] ✓ 通过 API 成功创建邮箱: {api_email}", _level="INFO")
+                # 构建新的tempmail_url（包含mailbox和admin_token参数）
+                parsed = urlparse(tempmail_url)
+                base_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+                if api_client.admin_token:
+                    new_tempmail_url = f"{base_url}?mailbox={api_email}&admin_token={api_client.admin_token}"
+                return (api_email, new_tempmail_url)
+        except Exception as e:
+            log_print(f"[临时邮箱] API 创建邮箱失败，回退到浏览器方式: {e}", _level="WARNING")
+        
+        # 回退到浏览器自动化方式
         # 切换到"创建新邮箱"标签页
         # 调试日志已关闭
         # print("[临时邮箱] 切换到'创建新邮箱'标签页...")
@@ -305,10 +335,21 @@ def get_email_from_tempmail(page, tempmail_url: str) -> Optional[str]:
             pass
     
     if email and '@' in email:
-        return email
+        # 如果通过浏览器方式获取到邮箱，也需要构建 new_tempmail_url
+        if new_tempmail_url is None:
+            try:
+                parsed = urlparse(tempmail_url)
+                url_params = parse_qs(parsed.query)
+                admin_token = url_params.get('admin_token', [''])[0]
+                if admin_token:
+                    base_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+                    new_tempmail_url = f"{base_url}?mailbox={email}&admin_token={admin_token}"
+            except:
+                pass
+        return (email, new_tempmail_url)
     else:
         print("[临时邮箱] ✗ 无法获取邮箱地址")
-        return None
+        return (None, None)
 
 # 尝试导入 API 客户端
 try:
@@ -2260,13 +2301,14 @@ def main():
                 # 在某些非交互环境下可能没有标准输入，直接跳过
                 pass
 
-def save_to_config(cookies_data: Dict[str, str], account_index: Optional[int] = None, tempmail_name: Optional[str] = None):
+def save_to_config(cookies_data: Optional[Dict[str, str]], account_index: Optional[int] = None, tempmail_name: Optional[str] = None, new_tempmail_url: Optional[str] = None):
     """保存 Cookie 到配置（支持数据库和 JSON）
     
     Args:
-        cookies_data: Cookie 数据
+        cookies_data: Cookie 数据，如果为None则只更新tempmail_url
         account_index: 如果提供，更新指定索引的账号；否则创建新账号
         tempmail_name: 临时邮箱名称（用于显示）
+        new_tempmail_url: 新的临时邮箱URL（用于保存新创建的邮箱地址）
     """
     try:
         # 尝试使用 account_manager（如果可用，会自动使用数据库）
@@ -2283,6 +2325,16 @@ def save_to_config(cookies_data: Dict[str, str], account_index: Optional[int] = 
             # 确保配置已加载
             if account_manager.config is None:
                 account_manager.load_config()
+            
+            # 如果只更新tempmail_url（cookies_data为None）
+            if cookies_data is None:
+                if account_index is not None and 0 <= account_index < len(account_manager.accounts):
+                    if new_tempmail_url:
+                        account_manager.accounts[account_index]["tempmail_url"] = new_tempmail_url
+                        account_manager.config["accounts"] = account_manager.accounts
+                        account_manager.save_config()
+                        print(f"[保存] ✓ 已更新账号 {account_index} 的 tempmail_url")
+                return
             
             account_data = {
                 "secure_c_ses": cookies_data["secure_c_ses"],
@@ -2361,6 +2413,16 @@ def save_to_config(cookies_data: Dict[str, str], account_index: Optional[int] = 
         
         if "accounts" not in config:
             config["accounts"] = []
+        
+        # 如果只更新tempmail_url（cookies_data为None）
+        if cookies_data is None:
+            if account_index is not None and 0 <= account_index < len(config["accounts"]):
+                if new_tempmail_url:
+                    config["accounts"][account_index]["tempmail_url"] = new_tempmail_url
+                    with open(config_file, "w", encoding="utf-8") as f:
+                        json.dump(config, f, ensure_ascii=False, indent=4)
+                    print(f"[保存] ✓ 已更新账号 {account_index} 的 tempmail_url (JSON)")
+            return
         
         account_data = {
             "secure_c_ses": cookies_data["secure_c_ses"],
@@ -2929,12 +2991,47 @@ def _refresh_single_account_internal(account_idx: int, account: dict, headless: 
                 try:
                     # 步骤1：获取临时邮箱
                     print(f"[登录] 正在获取临时邮箱地址...")
-                    email = get_email_from_tempmail(email_page, tempmail_url)
+                    
+                    # 优先使用已有的 tempmail_name（如果是有效的邮箱地址）
+                    email = None
+                    new_tempmail_url = None
+                    if tempmail_name and '@' in tempmail_name and not tempmail_name.startswith('noreply@'):
+                        # tempmail_name 已存在且是有效邮箱，直接使用
+                        email = tempmail_name
+                        print(f"[登录] 使用已有的临时邮箱: {email}")
+                    else:
+                        # 直接通过 API 创建新邮箱
+                        print(f"[登录] tempmail_name 无效，通过 API 创建新邮箱...")
+                        from app.tempmail_api import TempMailAPIClient
+                        try:
+                            client = TempMailAPIClient(tempmail_url)
+                            email = client.generate_email()
+                            if email:
+                                # 构建新的 tempmail_url
+                                from urllib.parse import urlparse, parse_qs
+                                parsed = urlparse(tempmail_url)
+                                params = parse_qs(parsed.query)
+                                admin_token = params.get('admin_token', [''])[0]
+                                base_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+                                new_tempmail_url = f"{base_url}?mailbox={email}&admin_token={admin_token}"
+                                print(f"[登录] ✓ API 创建新邮箱成功: {email}")
+                        except Exception as e:
+                            print(f"[登录] API 创建邮箱失败: {e}")
                     
                     if not email:
                         print(f"[单个账号刷新] ✗ 账号 {account_idx} 无法获取邮箱")
                         return False
                     print(f"[登录] ✓ 已获取临时邮箱: {email}")
+                    
+                    # 如果创建了新邮箱，立即保存tempmail_name和tempmail_url到配置
+                    if new_tempmail_url:
+                        print(f"[登录] 正在保存新创建的邮箱信息...")
+                        # 使用新创建的邮箱地址email作为tempmail_name，而不是旧的tempmail_name
+                        save_to_config(None, account_idx, email, new_tempmail_url)
+                        # 同时更新本地变量，确保后续流程使用新的邮箱名称
+                        tempmail_name = email
+                        tempmail_url = new_tempmail_url
+                        print(f"[登录] ✓ 已保存邮箱信息到配置: {email}")
                     
                     # 步骤2：在登录页面输入邮箱并点击继续，触发发送验证码邮件
                     print(f"[登录] 正在导航到登录页面...")
