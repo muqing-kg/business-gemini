@@ -38,8 +38,7 @@ from app.auth import get_admin_secret_key
 # 导入工具函数
 from app.utils import check_proxy
 
-# 导入 Cookie 刷新（使用临时邮箱方式）
-from app.cookie_refresh import auto_refresh_expired_cookies_worker
+# 导入 Cookie 刷新模块（start_auto_refresh_thread 在需要时动态导入）
 
 # 导入 WebSocket 管理器
 from app.websocket_manager import connection_manager, emit_system_log
@@ -194,10 +193,10 @@ if __name__ == '__main__':
             os.environ['FORCE_HEADED'] = '1'
             os.environ.pop('FORCE_HEADLESS', None)  # 清除 headless 标志
             print("[✓] 已启用强制有头模式（--headed）")
-        # 启动临时邮箱自动刷新线程（每30分钟检查过期 Cookie 并使用临时邮箱刷新）
-        expired_refresh_thread = threading.Thread(target=auto_refresh_expired_cookies_worker, daemon=True)
-        expired_refresh_thread.start()
-        print("[✓] Cookie 自动刷新功能已启用（每30分钟检查一次过期 Cookie，使用临时邮箱自动刷新）")
+        # 启动临时邮箱自动刷新线程（每1小时检查过期 Cookie 并使用临时邮箱刷新）
+        from app.cookie_refresh import start_auto_refresh_thread
+        if start_auto_refresh_thread():
+            print("[✓] Cookie 自动刷新功能已启用（每1小时检查一次过期 Cookie，使用临时邮箱自动刷新）")
     elif auto_refresh_enabled and not PLAYWRIGHT_AVAILABLE:
         print("[!] 警告: 配置启用了自动刷新 Cookie，但 Playwright 未安装")
         print("    安装命令: pip install playwright && playwright install chromium")

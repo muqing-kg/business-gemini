@@ -8,10 +8,69 @@ import time
 import re
 import base64
 import random
+import asyncio
 from pathlib import Path
 from typing import Optional, Dict
 from urllib.parse import urlparse
 from app.logger import print as log_print
+
+
+# ==================== 人类行为模拟辅助函数 ====================
+
+def simulate_mouse_movement(page, start_x: int, start_y: int, end_x: int, end_y: int, steps: int = None):
+    """模拟人类鼠标移动轨迹（贝塞尔曲线）"""
+    if steps is None:
+        steps = random.randint(15, 30)
+    
+    # 添加随机控制点实现贝塞尔曲线
+    ctrl_x = (start_x + end_x) / 2 + random.randint(-100, 100)
+    ctrl_y = (start_y + end_y) / 2 + random.randint(-50, 50)
+    
+    for i in range(steps + 1):
+        t = i / steps
+        # 二次贝塞尔曲线
+        x = (1-t)**2 * start_x + 2*(1-t)*t * ctrl_x + t**2 * end_x
+        y = (1-t)**2 * start_y + 2*(1-t)*t * ctrl_y + t**2 * end_y
+        # 添加微小抖动
+        x += random.randint(-2, 2)
+        y += random.randint(-2, 2)
+        page.mouse.move(x, y)
+        time.sleep(random.uniform(0.005, 0.02))
+
+
+def simulate_random_scroll(page):
+    """模拟随机滚动页面"""
+    scroll_amount = random.randint(100, 300)
+    direction = random.choice([1, -1])
+    page.mouse.wheel(0, scroll_amount * direction)
+    time.sleep(random.uniform(0.3, 0.8))
+
+
+def simulate_random_mouse_movement(page):
+    """在页面上随机移动鼠标"""
+    viewport = page.viewport_size
+    if viewport:
+        x = random.randint(100, viewport['width'] - 100)
+        y = random.randint(100, viewport['height'] - 100)
+        current_x = random.randint(0, viewport['width'])
+        current_y = random.randint(0, viewport['height'])
+        simulate_mouse_movement(page, current_x, current_y, x, y)
+
+
+def simulate_human_behavior(page):
+    """执行一系列模拟人类行为的操作"""
+    try:
+        # 随机选择执行的行为
+        behaviors = [
+            lambda: simulate_random_mouse_movement(page),
+            lambda: simulate_random_scroll(page),
+            lambda: time.sleep(random.uniform(0.5, 1.5)),  # 随机停顿
+        ]
+        # 随机执行1-2个行为
+        for _ in range(random.randint(1, 2)):
+            random.choice(behaviors)()
+    except Exception:
+        pass  # 忽略模拟行为中的错误
 
 # 注意：这个脚本需要使用 chrome-mcp 工具
 # 由于无法直接调用 chrome-mcp，这里提供使用 Playwright 的实现
@@ -1767,10 +1826,17 @@ def main():
             browser = p.chromium.launch(headless=False, args=launch_args)
         
         # 创建浏览器上下文，使用真实的用户代理和视口（增强版）
-        # 使用最新的 Chrome User-Agent
+        # 随机化浏览器指纹以降低被检测风险
+        import random
+        chrome_versions = ["130.0.0.0", "131.0.0.0", "132.0.0.0", "133.0.0.0"]
+        chrome_ver = random.choice(chrome_versions)
+        viewports = [(1920, 1080), (1366, 768), (1536, 864), (1440, 900), (1280, 720)]
+        vp_width, vp_height = random.choice(viewports)
+        
+        # 注意：不使用 storage_state 参数，确保每次都是全新的浏览器状态（无缓存、无 cookies）
         context = browser.new_context(
-            viewport={"width": 1920, "height": 1080},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            viewport={"width": vp_width, "height": vp_height},
+            user_agent=f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{chrome_ver} Safari/537.36",
             locale="zh-CN",
             timezone_id="Asia/Shanghai",
             # 添加额外的反检测措施（增强版）
@@ -1778,7 +1844,7 @@ def main():
                 "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
                 "Accept-Encoding": "gzip, deflate, br, zstd",
-                "Sec-CH-UA": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+                "Sec-CH-UA": f'"Google Chrome";v="{chrome_ver.split(".")[0]}", "Chromium";v="{chrome_ver.split(".")[0]}", "Not_A Brand";v="24"',
                 "Sec-CH-UA-Mobile": "?0",
                 "Sec-CH-UA-Platform": '"Windows"',
                 "Sec-Fetch-Dest": "document",
@@ -1793,6 +1859,9 @@ def main():
             reduced_motion="no-preference",
             forced_colors="none",
         )
+        
+        # 清除所有 cookies 确保全新状态
+        context.clear_cookies()
         
         # 注入脚本以隐藏自动化特征（超级增强版，更强力绕过 reCAPTCHA）
         context.add_init_script("""
@@ -2604,10 +2673,10 @@ def _refresh_single_account_internal(account_idx: int, account: dict, headless: 
             if headless:
                 # 添加 --headless=new 参数以启用新的无头模式（更难被检测）
                 launch_args.append('--headless=new')
-                browser = p.chromium.launch(headless=True, args=launch_args)
+                browser = p.chromium.launch(headless=True, args=launch_args, slow_mo=50)
             else:
                 # 有头模式
-                browser = p.chromium.launch(headless=False, args=launch_args)
+                browser = p.chromium.launch(headless=False, args=launch_args, slow_mo=50)
             print(f"[登录] ✓ 浏览器已启动")
             
             # 创建浏览器上下文，使用真实的用户代理和视口（增强版）
@@ -2988,6 +3057,11 @@ def _refresh_single_account_internal(account_idx: int, account: dict, headless: 
                 login_page = context.new_page()
                 print(f"[登录] ✓ 页面标签已创建")
                 
+                # 模拟人类行为：随机延迟和鼠标移动
+                print(f"[登录] 正在模拟人类行为...")
+                time.sleep(random.uniform(1, 3))  # 随机等待1-3秒
+                simulate_human_behavior(login_page)
+                
                 try:
                     # 步骤1：获取临时邮箱
                     print(f"[登录] 正在获取临时邮箱地址...")
@@ -3037,7 +3111,10 @@ def _refresh_single_account_internal(account_idx: int, account: dict, headless: 
                     print(f"[登录] 正在导航到登录页面...")
                     login_page.goto(GEMINI_LOGIN_URL, wait_until="networkidle", timeout=60000)
                     print(f"[登录] ✓ 已导航到登录页面")
-                    login_page.wait_for_timeout(3000)
+                    login_page.wait_for_timeout(random.randint(2000, 4000))  # 随机等待2-4秒
+                    
+                    # 模拟人类行为：页面加载后随机移动鼠标
+                    simulate_human_behavior(login_page)
                     
                     try:
                         email_input = login_page.locator(
@@ -4364,34 +4441,49 @@ def refresh_expired_accounts(headless: bool = None):
     
     print(f"[批量刷新] 找到 {len(expired_accounts)} 个过期的账号，开始刷新...")
     
+    # 错峰刷新：添加随机初始延迟（0-5分钟），避免整点刷新
+    import random
+    initial_delay = random.randint(0, 300)  # 0-5分钟随机延迟
+    print(f"[批量刷新] 错峰刷新：等待 {initial_delay} 秒后开始...")
+    time.sleep(initial_delay)
+    
     # 使用统一的刷新函数，确保批量模式和手动模式流程一致
-    # 直接调用 refresh_single_account，避免重复实现，保证流程完全一致
     success_count = 0
     fail_count = 0
+    consecutive_failures = {}  # 记录每个账号的连续失败次数
     
     for account_idx, account in expired_accounts:
+        # 检查连续失败次数，超过3次则暂停该账号
+        if consecutive_failures.get(account_idx, 0) >= 3:
+            print(f"[批量刷新] ⚠ 账号 {account_idx} 连续失败3次，暂停刷新")
+            continue
+        
         print("\n" + "="*60)
         print(f"刷新账号 {account_idx} (csesidx: {account.get('csesidx', 'N/A')})")
         print("="*60)
         
-        # 直接调用 refresh_single_account，确保流程一致
         try:
             success = refresh_single_account(account_idx, account, headless=headless)
             if success:
                 success_count += 1
+                consecutive_failures[account_idx] = 0  # 重置失败计数
                 print(f"[批量刷新] ✓ 账号 {account_idx} 刷新成功")
             else:
                 fail_count += 1
-                print(f"[批量刷新] ✗ 账号 {account_idx} 刷新失败")
+                consecutive_failures[account_idx] = consecutive_failures.get(account_idx, 0) + 1
+                print(f"[批量刷新] ✗ 账号 {account_idx} 刷新失败（连续失败 {consecutive_failures[account_idx]} 次）")
         except Exception as e:
             fail_count += 1
+            consecutive_failures[account_idx] = consecutive_failures.get(account_idx, 0) + 1
             print(f"[批量刷新] ✗ 账号 {account_idx} 刷新时发生错误: {e}")
             import traceback
             traceback.print_exc()
         
-        # 等待一下再处理下一个账号，避免请求过快
-        if account_idx < len(expired_accounts) - 1:  # 不是最后一个账号
-            time.sleep(2)
+        # 随机延迟：模拟人类行为，等待5-15秒再处理下一个账号
+        if account_idx < len(expired_accounts) - 1:
+            delay = random.randint(5, 15)
+            print(f"[批量刷新] 等待 {delay} 秒后处理下一个账号...")
+            time.sleep(delay)
     
     print(f"\n[批量刷新] ✓ 所有账号处理完成（成功: {success_count}, 失败: {fail_count}, 总计: {len(expired_accounts)}）")
 

@@ -12,7 +12,7 @@
 - ✅ **代理支持**：支持 HTTP/HTTPS 代理配置
 - ✅ **JWT 自动管理**：自动获取和刷新 JWT Token
 - ✅ **账号冷却机制**：智能处理账号限流和错误，自动冷却
-- ✅ **Cookie 自动刷新**：每30分钟自动检查过期 Cookie，使用临时邮箱自动登录刷新
+- ✅ **Cookie 自动刷新**：每1小时自动检查过期 Cookie，使用临时邮箱自动登录刷新
 
 ## 🏗️ 项目结构
 
@@ -29,8 +29,10 @@ business-gemini-pool-main/
 ├── docker-compose.yml                 # Docker Compose 配置
 ├── README.md                          # 项目文档
 ├── docs/                              # 文档目录
-└── image/                             # 图片缓存目录（自动创建）
-└── video/                             # 视频缓存目录（自动创建）
+└── data/                              # 数据目录（自动创建）
+    ├── db/                            # 数据库目录
+    ├── image/                         # 图片缓存目录
+    └── video/                         # 视频缓存目录
 ```
 
 
@@ -141,13 +143,6 @@ docker compose up -d --build
 ```yaml
 ports:
   - "8001:8000"  # 将主机端口 8001 映射到容器端口 8000
-```
-
-或通过环境变量：
-
-```yaml
-environment:
-  - SERVER_PORT=8001
 ```
 
 #### 4. 更新配置

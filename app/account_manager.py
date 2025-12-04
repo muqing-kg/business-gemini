@@ -408,11 +408,16 @@ class AccountManager:
                     # 使用延迟导入避免循环导入
                     import sys
                     cookie_refresh_module = sys.modules.get('app.cookie_refresh')
-                    if cookie_refresh_module and hasattr(cookie_refresh_module, '_immediate_refresh_event'):
-                        cookie_refresh_module._immediate_refresh_event.set()
-                        print(f"[Cookie 自动刷新] ⚡ 账号 {index} Cookie 过期，已触发立即刷新检查")
-                except (ImportError, AttributeError):
-                    # cookie_refresh 模块可能还未加载，忽略
+                    if cookie_refresh_module:
+                        # 先确保线程正在运行
+                        if hasattr(cookie_refresh_module, 'start_auto_refresh_thread'):
+                            cookie_refresh_module.start_auto_refresh_thread()
+                        # 然后触发立即刷新事件
+                        if hasattr(cookie_refresh_module, '_immediate_refresh_event'):
+                            cookie_refresh_module._immediate_refresh_event.set()
+                            print(f"[Cookie 自动刷新] ⚡ 账号 {index} Cookie 过期，已触发立即刷新检查")
+                except (ImportError, AttributeError) as e:
+                    print(f"[Cookie 自动刷新] 触发刷新失败: {e}")
                     pass
     
     def mark_cookie_refreshed(self, index: int):

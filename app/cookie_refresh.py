@@ -19,6 +19,41 @@ from .account_manager import account_manager
 # 用于通知自动刷新线程立即检查过期账号的事件
 _immediate_refresh_event = threading.Event()
 
+# 用于跟踪自动刷新线程状态
+_auto_refresh_thread = None
+_auto_refresh_thread_lock = threading.Lock()
+
+
+def start_auto_refresh_thread():
+    """启动自动刷新线程（如果尚未运行）"""
+    global _auto_refresh_thread
+    
+    if not PLAYWRIGHT_AVAILABLE:
+        print("[!] Playwright 未安装，无法启动自动刷新线程")
+        return False
+    
+    if not PLAYWRIGHT_BROWSER_INSTALLED:
+        print("[!] Playwright 浏览器未安装，无法启动自动刷新线程")
+        return False
+    
+    with _auto_refresh_thread_lock:
+        # 检查线程是否已在运行
+        if _auto_refresh_thread is not None and _auto_refresh_thread.is_alive():
+            print("[Cookie 自动刷新] 线程已在运行")
+            return True
+        
+        # 启动新线程
+        _auto_refresh_thread = threading.Thread(target=auto_refresh_expired_cookies_worker, daemon=True)
+        _auto_refresh_thread.start()
+        print("[✓] Cookie 自动刷新线程已启动")
+        return True
+
+
+def is_auto_refresh_thread_running():
+    """检查自动刷新线程是否正在运行"""
+    with _auto_refresh_thread_lock:
+        return _auto_refresh_thread is not None and _auto_refresh_thread.is_alive()
+
 
 def refresh_cookie_with_browser(account: dict, proxy: Optional[str] = None) -> Optional[Dict[str, str]]:
     """
@@ -1434,7 +1469,7 @@ def cookie_refresh_worker():
         started_count += 1
         print(f"[浏览器会话] 账号 {idx} 的浏览器会话线程已启动")
     
-    print(f"[浏览器会话] 已为 {started_count} 个账号启动浏览器会话（每1小时自动刷新）")
+    print(f"[浏览器会话] 已为 {started_count} 个账号启动浏览器会话（每2小时自动刷新）")
 
 
 def auto_refresh_expired_cookies_worker():
@@ -1451,18 +1486,13 @@ def auto_refresh_expired_cookies_worker():
         return
     
     # 等待一下，让主程序完全启动
-    time.sleep(10)
+    time.sleep(5)
     
-    # 检查配置是否启用自动刷新
-    auto_refresh_enabled = account_manager.config.get("auto_refresh_cookie", False)
-    if not auto_refresh_enabled:
-        print("[提示] 自动刷新 Cookie 功能未启用（在系统设置中启用）")
-        return
+    # 不再检查配置，因为 start_auto_refresh_thread 已经确保配置已启用
+    print("[Cookie 自动刷新] 后台线程已启动，将每2小时检查一次过期的 Cookie")
     
-    print("[Cookie 自动刷新] 后台线程已启动，将每30分钟检查一次过期的 Cookie")
-    
-    # 检查间隔：30分钟
-    CHECK_INTERVAL = 30 * 60
+    # 检查间隔：2小时
+    CHECK_INTERVAL = 60 * 60 * 2
     
     # 记录上次检查时间，用于日志
     last_check_time = time.time()

@@ -50,6 +50,7 @@ from .session_manager import ensure_session_for_account, upload_file_to_gemini, 
 # 导入聊天处理
 from .chat_handler import (
     stream_chat_with_images,
+    stream_chat_realtime_generator,
     build_openai_response_content,
     get_image_base_url
 )
@@ -535,9 +536,25 @@ def register_routes(app):
                         request_quota_type = "videos"
                     # 文本查询不需要指定配额类型（429 错误时冷却整个账号）
                     
-                    chat_response = stream_chat_with_images(jwt, session, user_message, proxy, team_id, gemini_file_ids, api_model_id, account_manager, account_idx, request_quota_type)
-                    successful_account_idx = account_idx
-                    break
+                    # 流式模式：使用真正的流式生成器（边接收边解析边转发）
+                    # 非流式模式：使用原来的函数（先收集完整响应再返回）
+                    if stream:
+                        chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+                        created_ts = int(time.time())
+                        stream_generator = stream_chat_realtime_generator(
+                            jwt, session, user_message, proxy, team_id, 
+                            gemini_file_ids, api_model_id, account_manager, 
+                            account_idx, request_quota_type,
+                            chat_id=chat_id, created=created_ts, model_name=requested_model,
+                            host_url=request.host_url
+                        )
+                        successful_account_idx = account_idx
+                        chat_response = None
+                        break
+                    else:
+                        chat_response = stream_chat_with_images(jwt, session, user_message, proxy, team_id, gemini_file_ids, api_model_id, account_manager, account_idx, request_quota_type)
+                        successful_account_idx = account_idx
+                        break
                 except AccountRateLimitError as e:
                     last_error = e
                     if account_idx is not None:
@@ -603,97 +620,46 @@ def register_routes(app):
                         break
                     continue
             
-            if chat_response is None:
-                error_message = last_error or "没有可用的账号"
-                status_code = 429 if isinstance(last_error, (AccountRateLimitError, NoAvailableAccount)) else 500
-                return jsonify({"error": f"所有账号请求失败: {error_message}"}), status_code
-
-            # 被动检测方式：不再主动记录配额使用量
-            # 配额错误会通过 HTTP 错误码（401, 403, 429）被动检测，并在 raise_for_account_response 中处理
-
-            response_content = build_openai_response_content(chat_response, request.host_url, account_manager, request, data)
-
+            # 流式模式：使用实时流式生成器
             if stream:
+                if 'stream_generator' not in locals():
+                    error_message = last_error or "没有可用的账号"
+                    status_code = 429 if isinstance(last_error, (AccountRateLimitError, NoAvailableAccount)) else 500
+                    return jsonify({"error": f"所有账号请求失败: {error_message}"}), status_code
+                
                 def generate():
-                    chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
-                    
-                    # 如果 response_content 是数组（包含图片），需要分别发送文本和图片
-                    if isinstance(response_content, list):
-                        # 先发送文本部分
-                        text_parts = [item for item in response_content if item.get("type") == "text"]
-                        if text_parts:
-                            text_content = " ".join(item.get("text", "") for item in text_parts)
-                            if text_content.strip():
-                                # 分块发送文本
-                                words = text_content.split(" ")
-                                for i, word in enumerate(words):
-                                    chunk = {
-                                        "id": chunk_id,
-                                        "object": "chat.completion.chunk",
-                                        "created": int(time.time()),
-                                        "model": requested_model,
-                                        "choices": [{
-                                            "index": 0,
-                                            "delta": {"content": word + (" " if i < len(words) - 1 else "")},
-                                            "finish_reason": None
-                                        }]
-                                    }
-                                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                    try:
+                        for chunk in stream_generator:
+                            yield chunk
                         
-                        # 然后发送图片/视频部分
-                        # 注意：流式响应中 delta.content 必须是字符串，不能是对象
-                        # 将图片 URL 作为字符串发送，这样兼容性更好（chat_history.html 可以通过正则识别）
-                        media_parts = [item for item in response_content if item.get("type") == "image_url"]
-                        for media_item in media_parts:
-                            image_url = media_item.get("image_url", {}).get("url", "")
-                            if image_url:
-                                # 将图片 URL 作为字符串发送（换行分隔，便于 chat_history.html 识别）
-                                # 使用换行符分隔，这样 chat_history.html 的 parseContentWithMedia 函数可以通过正则识别
-                                image_url_text = f"\n{image_url}\n"
-                                image_chunk = {
-                                    "id": chunk_id,
-                                    "object": "chat.completion.chunk",
-                                    "created": int(time.time()),
-                                    "model": requested_model,
-                                    "choices": [{
-                                        "index": 0,
-                                        "delta": {"content": image_url_text},
-                                        "finish_reason": None
-                                    }]
-                                }
-                                yield f"data: {json.dumps(image_chunk, ensure_ascii=False)}\n\n"
-                    else:
-                        # 纯文本，分块发送
-                        if response_content and response_content.strip():
-                            words = response_content.split(" ")
-                            for i, word in enumerate(words):
-                                chunk = {
-                                    "id": chunk_id,
-                                    "object": "chat.completion.chunk",
-                                    "created": int(time.time()),
-                                    "model": requested_model,
-                                    "choices": [{
-                                        "index": 0,
-                                        "delta": {"content": word + (" " if i < len(words) - 1 else "")},
-                                        "finish_reason": None
-                                    }]
-                                }
-                                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-                    
-                    # 发送结束标记
-                    end_chunk = {
-                        "id": chunk_id,
-                        "object": "chat.completion.chunk",
-                        "created": int(time.time()),
-                        "model": requested_model,
-                        "choices": [{
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": "stop"
-                        }]
-                    }
-                    yield f"data: {json.dumps(end_chunk, ensure_ascii=False)}\n\n"
-                    yield "data: [DONE]\n\n"
+                        end_chunk = {
+                            "id": chat_id,
+                            "object": "chat.completion.chunk",
+                            "created": created_ts,
+                            "model": requested_model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {},
+                                "finish_reason": "stop"
+                            }]
+                        }
+                        yield f"data: {json.dumps(end_chunk, ensure_ascii=False)}\n\n"
+                        yield "data: [DONE]\n\n"
+                    except Exception as e:
+                        error_chunk = {
+                            "id": chat_id,
+                            "object": "chat.completion.chunk",
+                            "created": created_ts,
+                            "model": requested_model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {},
+                                "finish_reason": "stop"
+                            }],
+                            "error": {"message": str(e)}
+                        }
+                        yield f"data: {json.dumps(error_chunk, ensure_ascii=False)}\n\n"
+                        yield "data: [DONE]\n\n"
                 
                 # 对于流式响应，在开始时就记录日志（响应大小无法准确计算）
                 response_time = int((time.time() - request_start_time) * 1000)
@@ -713,46 +679,54 @@ def register_routes(app):
                     pass  # 日志记录失败不应影响主流程
 
                 return Response(generate(), mimetype='text/event-stream')
-            else:
-                # 非流式响应：response_content 可能是字符串或数组
-                response = {
-                    "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
-                    "object": "chat.completion",
-                    "created": int(time.time()),
-                    "model": requested_model,
-                    "choices": [{
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": response_content  # 可以是字符串或数组
-                        },
-                        "finish_reason": "stop"
-                    }],
-                    "usage": {
-                        "prompt_tokens": len(user_message),
-                        "completion_tokens": len(chat_response.text),
-                        "total_tokens": len(user_message) + len(chat_response.text)
-                    }
+            
+            # 非流式模式
+            if chat_response is None:
+                error_message = last_error or "没有可用的账号"
+                status_code = 429 if isinstance(last_error, (AccountRateLimitError, NoAvailableAccount)) else 500
+                return jsonify({"error": f"所有账号请求失败: {error_message}"}), status_code
+            
+            response_content = build_openai_response_content(chat_response, request.host_url, account_manager, request, data)
+            
+            # 非流式响应：response_content 可能是字符串或数组
+            response = {
+                "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": requested_model,
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": response_content  # 可以是字符串或数组
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": len(user_message),
+                    "completion_tokens": len(chat_response.text),
+                    "total_tokens": len(user_message) + len(chat_response.text)
                 }
-                # 记录成功日志
-                response_time = int((time.time() - request_start_time) * 1000)
-                response_size = len(json.dumps(response, ensure_ascii=False).encode())
-                try:
-                    from .api_key_manager import log_api_call
-                    log_api_call(
-                        api_key_id=api_key_id,
-                        model=requested_model,
-                        status="success",
-                        response_time=response_time,
-                        ip_address=ip_address,
-                        endpoint=endpoint,
-                        request_size=request_size,
-                        response_size=response_size
-                    )
-                except Exception:
-                    pass  # 日志记录失败不应影响主流程
-                
-                return jsonify(response)
+            }
+            # 记录成功日志
+            response_time = int((time.time() - request_start_time) * 1000)
+            response_size = len(json.dumps(response, ensure_ascii=False).encode())
+            try:
+                from .api_key_manager import log_api_call
+                log_api_call(
+                    api_key_id=api_key_id,
+                    model=requested_model,
+                    status="success",
+                    response_time=response_time,
+                    ip_address=ip_address,
+                    endpoint=endpoint,
+                    request_size=request_size,
+                    response_size=response_size
+                )
+            except Exception:
+                pass  # 日志记录失败不应影响主流程
+            
+            return jsonify(response)
 
         except Exception as e:
             # 记录失败日志
@@ -1116,9 +1090,14 @@ def register_routes(app):
                 try:
                     import sys
                     cookie_refresh_module = sys.modules.get('app.cookie_refresh')
-                    if cookie_refresh_module and hasattr(cookie_refresh_module, '_immediate_refresh_event'):
-                        cookie_refresh_module._immediate_refresh_event.set()
-                        print(f"[Cookie 自动刷新] ⚡ 账号 {account_id} Cookie 已清空，已触发立即刷新检查")
+                    if cookie_refresh_module:
+                        # 先确保线程正在运行
+                        if hasattr(cookie_refresh_module, 'start_auto_refresh_thread'):
+                            cookie_refresh_module.start_auto_refresh_thread()
+                        # 然后触发立即刷新事件
+                        if hasattr(cookie_refresh_module, '_immediate_refresh_event'):
+                            cookie_refresh_module._immediate_refresh_event.set()
+                            print(f"[Cookie 自动刷新] ⚡ 账号 {account_id} Cookie 已清空，已触发立即刷新检查")
                 except (ImportError, AttributeError):
                     pass
         
@@ -1361,9 +1340,14 @@ def register_routes(app):
                 try:
                     import sys
                     cookie_refresh_module = sys.modules.get('app.cookie_refresh')
-                    if cookie_refresh_module and hasattr(cookie_refresh_module, '_immediate_refresh_event'):
-                        cookie_refresh_module._immediate_refresh_event.set()
-                        print(f"[Cookie 自动刷新] ⚡ 账号 {account_id} Cookie 已清空，已触发立即刷新检查")
+                    if cookie_refresh_module:
+                        # 先确保线程正在运行
+                        if hasattr(cookie_refresh_module, 'start_auto_refresh_thread'):
+                            cookie_refresh_module.start_auto_refresh_thread()
+                        # 然后触发立即刷新事件
+                        if hasattr(cookie_refresh_module, '_immediate_refresh_event'):
+                            cookie_refresh_module._immediate_refresh_event.set()
+                            print(f"[Cookie 自动刷新] ⚡ 账号 {account_id} Cookie 已清空，已触发立即刷新检查")
                 except (ImportError, AttributeError):
                     pass
             
@@ -1643,6 +1627,13 @@ def register_routes(app):
             account_manager.config["upload_api_token"] = data["upload_api_token"]
         if "auto_refresh_cookie" in data:
             account_manager.config["auto_refresh_cookie"] = bool(data["auto_refresh_cookie"])
+            # 如果启用了自动刷新，尝试启动后台线程
+            if data["auto_refresh_cookie"]:
+                try:
+                    from .cookie_refresh import start_auto_refresh_thread
+                    start_auto_refresh_thread()
+                except Exception as e:
+                    print(f"[!] 启动自动刷新线程失败: {e}")
         if "tempmail_worker_url" in data:
             account_manager.config["tempmail_worker_url"] = data["tempmail_worker_url"] or None
         if "image_output_mode" in data:

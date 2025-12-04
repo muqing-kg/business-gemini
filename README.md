@@ -50,7 +50,7 @@ curl --location --request POST 'http://127.0.0.1:8000/v1/chat/completions' \
 - **cfbed 上传集成**: 支持将生成的图片/视频自动上传到 cfbed 服务，返回公网可访问的 URL
 - **代理支持**: 支持 HTTP/HTTPS 代理配置
 - **JWT 自动管理**: 自动获取和刷新 JWT Token
-- **Cookie 自动刷新**: 每30分钟自动检查过期 Cookie，使用临时邮箱自动登录刷新
+- **Cookie 自动刷新**: 每2小时自动检查过期 Cookie，使用临时邮箱自动登录刷新
   - **双模式登录流程**: 支持 API 方式和浏览器方式两种独立的登录流程，自动切换
   - **智能重试机制**: API 方式失败时自动切换到浏览器方式，确保登录成功率
 - **Web 登录系统**: 独立登录页与 HttpOnly Cookie 结合，保护所有管理页面
@@ -115,13 +115,10 @@ business-gemini-pool-main/
         ports:
           - "8000:8000"
         volumes:
-          - ./image:/app/image:rw
-          - ./video:/app/video:rw
+          - ./data:/app/data:rw
         environment:
           - PYTHONUNBUFFERED=1
-          - SERVER_PORT=8000
-          - SERVER_HOST=0.0.0.0
-          - DATABASE_PATH=/app/geminibusiness.db
+          - DATABASE_PATH=/app/data/db/geminibusiness.db
         healthcheck:
           test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5)"]
           interval: 30s
@@ -526,7 +523,7 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 2. **代理**: 如果需要访问 Google 服务，可能需要配置代理
 3. **账号限制**: 请遵守 Google 的使用条款，合理使用 API
 4. **JWT 有效期**: JWT Token 有效期有限，系统会自动刷新
-5. **Cookie 自动刷新**: 系统每30分钟自动检查过期 Cookie，使用临时邮箱自动登录刷新。需要为账号配置 `tempmail_url` 和 `tempmail_name` 字段
+5. **Cookie 自动刷新**: 系统每1小时自动检查过期 Cookie，使用临时邮箱自动登录刷新。需要为账号配置 `tempmail_url` 和 `tempmail_name` 字段
    - **API 方式**: 如果临时邮箱服务支持 API，优先使用 API 方式获取验证码（更快、更稳定）
    - **浏览器方式**: API 方式失败时自动切换到浏览器方式，确保登录成功
    - **自动切换**: 系统会自动在两种方式之间切换，无需手动配置

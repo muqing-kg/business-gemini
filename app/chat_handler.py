@@ -29,6 +29,80 @@ from .logger import print
 # 为了避免循环引用，这里先不导入，通过参数传递
 
 
+class JSONStreamParser:
+    """处理分块 JSON 流的解析器"""
+    def __init__(self):
+        self.buffer = ""
+        
+    def feed(self, chunk: str):
+        """添加新的数据块并尝试解析完整的 JSON 对象"""
+        self.buffer += chunk
+        results = []
+        
+        while True:
+            try:
+                obj, end_idx = self._try_parse()
+                if obj is not None:
+                    results.append(obj)
+                    self.buffer = self.buffer[end_idx:].lstrip()
+                else:
+                    break
+            except Exception:
+                break
+        
+        return results
+    
+    def _try_parse(self):
+        """尝试从缓冲区解析一个 JSON 对象"""
+        if not self.buffer.strip():
+            return None, 0
+            
+        start = -1
+        for i, c in enumerate(self.buffer):
+            if c in '{[':
+                start = i
+                break
+        
+        if start == -1:
+            return None, 0
+        
+        bracket_count = 0
+        in_string = False
+        escape_next = False
+        
+        for i in range(start, len(self.buffer)):
+            c = self.buffer[i]
+            
+            if escape_next:
+                escape_next = False
+                continue
+                
+            if c == '\\':
+                escape_next = True
+                continue
+                
+            if c == '"' and not escape_next:
+                in_string = not in_string
+                continue
+                
+            if in_string:
+                continue
+                
+            if c in '{[':
+                bracket_count += 1
+            elif c in '}]':
+                bracket_count -= 1
+                
+                if bracket_count == 0:
+                    try:
+                        obj = json.loads(self.buffer[start:i+1])
+                        return obj, i + 1
+                    except json.JSONDecodeError:
+                        return None, 0
+        
+        return None, 0
+
+
 def get_tools_spec_for_model(model_id: Optional[str]) -> Dict[str, Any]:
     """根据模型ID返回相应的工具配置
     
@@ -57,6 +131,256 @@ def get_tools_spec_for_model(model_id: Optional[str]) -> Dict[str, Any]:
         "imageGenerationSpec": {},
         "videoGenerationSpec": {}
     }
+
+
+def stream_chat_realtime_generator(jwt: str, sess_name: str, message: str, 
+                                   proxy: str, team_id: str, file_ids: List[str] = None, 
+                                   model_id: Optional[str] = None, account_manager=None, 
+                                   account_idx: Optional[int] = None, quota_type: Optional[str] = None,
+                                   chat_id: str = None, created: int = None, model_name: str = None,
+                                   host_url: str = None):
+    """实时流式生成器：边接收边解析边转发
+    
+    Args:
+        jwt: JWT token
+        sess_name: Session名称
+        message: 消息内容
+        proxy: 代理设置
+        team_id: Team ID
+        file_ids: 文件ID列表
+        model_id: 模型ID（可选）
+        account_manager: AccountManager实例
+        account_idx: 账号索引
+        quota_type: 配额类型
+        chat_id: 聊天ID（用于OpenAI格式）
+        created: 创建时间戳
+        model_name: 模型名称（用于OpenAI格式）
+        host_url: 主机URL（用于构建图片URL）
+    
+    Yields:
+        SSE格式的数据块
+    """
+    query_parts = [{"text": message}]
+    request_file_ids = file_ids if file_ids else []
+    
+    tools_spec = get_tools_spec_for_model(model_id)
+    
+    body = {
+        "configId": team_id,
+        "additionalParams": {"token": "-"},
+        "streamAssistRequest": {
+            "session": sess_name,
+            "query": {"parts": query_parts},
+            "filter": "",
+            "fileIds": request_file_ids,
+            "answerGenerationMode": "NORMAL",
+            "toolsSpec": tools_spec,
+            "languageCode": "zh-CN",
+            "userMetadata": {"timeZone": "Etc/GMT-8"},
+            "assistSkippingMode": "REQUEST_ASSIST"
+        }
+    }
+    
+    if model_id and model_id not in ["gemini-video", "gemini-image"]:
+        body["streamAssistRequest"]["assistGenerationConfig"] = {
+            "modelId": model_id
+        }
+    
+    headers = {
+        "Authorization": f"Bearer {jwt}",
+        "Content-Type": "application/json"
+    }
+    
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    
+    url = "https://alkalimakersuite-pa.clients6.google.com/v1/makers/assistants:streamAssist"
+    
+    try:
+        response = requests.post(
+            url,
+            headers=headers,
+            json=body,
+            proxies=proxies,
+            stream=True,
+            timeout=300
+        )
+        
+        from .account_manager import raise_for_account_response
+        raise_for_account_response(response, account_manager, account_idx, quota_type)
+        
+        parser = JSONStreamParser()
+        collected_file_ids = set()
+        
+        for chunk in response.iter_content(chunk_size=1024, decode_unicode=True):
+            if not chunk:
+                continue
+            
+            if isinstance(chunk, bytes):
+                chunk = chunk.decode('utf-8', errors='ignore')
+            
+            json_objects = parser.feed(chunk)
+            
+            for obj in json_objects:
+                # 处理 generatedImages
+                if "generatedImages" in obj:
+                    for img_data in obj.get("generatedImages", []):
+                        media_result = parse_generated_media(img_data, account_manager, host_url)
+                        if media_result and media_result.get("url"):
+                            media_url = media_result["url"]
+                            img_chunk = {
+                                "id": chat_id,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": model_name,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {"content": media_url},
+                                    "finish_reason": None
+                                }]
+                            }
+                            yield f"data: {json.dumps(img_chunk, ensure_ascii=False)}\n\n"
+                
+                # 处理文本回复
+                if "reply" in obj:
+                    reply = obj["reply"]
+                    if "assistReply" in reply:
+                        assist_reply = reply["assistReply"]
+                        if "content" in assist_reply:
+                            content = assist_reply["content"]
+                            if "parts" in content:
+                                for part in content["parts"]:
+                                    # 收集文件ID
+                                    if "fileId" in part:
+                                        collected_file_ids.add(part["fileId"])
+                                    
+                                    # 实时转发文本（过滤思考输出）
+                                    if "text" in part:
+                                        thought = part.get("thought", False)
+                                        import logging
+                                        logging.info(f"[流式输出] thought={thought}, text长度={len(part.get('text', ''))}")
+                                        if not thought:
+                                            text = part["text"]
+                                            text_chunk = {
+                                                "id": chat_id,
+                                                "object": "chat.completion.chunk",
+                                                "created": created,
+                                                "model": model_name,
+                                                "choices": [{
+                                                    "index": 0,
+                                                    "delta": {"content": text},
+                                                    "finish_reason": None
+                                                }]
+                                            }
+                                            yield f"data: {json.dumps(text_chunk, ensure_ascii=False)}\n\n"
+        
+        # 处理收集到的文件ID（图片/视频）
+        if collected_file_ids and host_url:
+            for file_id in collected_file_ids:
+                try:
+                    file_url = f"https://alkalimakersuite-pa.clients6.google.com/v1/files/{file_id}:download"
+                    file_response = requests.get(
+                        file_url,
+                        headers={"Authorization": f"Bearer {jwt}"},
+                        proxies=proxies,
+                        timeout=60
+                    )
+                    
+                    if file_response.status_code == 200:
+                        content_type = file_response.headers.get('Content-Type', '')
+                        file_data = file_response.content
+                        
+                        cfbed_url = get_cfbed_url()
+                        cfbed_api_key = get_cfbed_api_key()
+                        
+                        if cfbed_url and cfbed_api_key:
+                            b64_data = base64.b64encode(file_data).decode('utf-8')
+                            
+                            if 'video' in content_type:
+                                upload_response = requests.post(
+                                    f"{cfbed_url}/upload/video",
+                                    headers={"X-API-Key": cfbed_api_key, "Content-Type": "application/json"},
+                                    json={"video": b64_data},
+                                    timeout=120
+                                )
+                                if upload_response.status_code == 200:
+                                    result = upload_response.json()
+                                    if result.get("success") and result.get("url"):
+                                        media_url = result["url"]
+                                        media_chunk = {
+                                            "id": chat_id,
+                                            "object": "chat.completion.chunk",
+                                            "created": created,
+                                            "model": model_name,
+                                            "choices": [{
+                                                "index": 0,
+                                                "delta": {"content": media_url},
+                                                "finish_reason": None
+                                            }]
+                                        }
+                                        yield f"data: {json.dumps(media_chunk, ensure_ascii=False)}\n\n"
+                            else:
+                                upload_response = requests.post(
+                                    f"{cfbed_url}/upload",
+                                    headers={"X-API-Key": cfbed_api_key, "Content-Type": "application/json"},
+                                    json={"image": b64_data},
+                                    timeout=60
+                                )
+                                if upload_response.status_code == 200:
+                                    result = upload_response.json()
+                                    if result.get("success") and result.get("url"):
+                                        media_url = result["url"]
+                                        media_chunk = {
+                                            "id": chat_id,
+                                            "object": "chat.completion.chunk",
+                                            "created": created,
+                                            "model": model_name,
+                                            "choices": [{
+                                                "index": 0,
+                                                "delta": {"content": media_url},
+                                                "finish_reason": None
+                                            }]
+                                        }
+                                        yield f"data: {json.dumps(media_chunk, ensure_ascii=False)}\n\n"
+                        else:
+                            # 本地缓存
+                            cache_id = str(uuid.uuid4())
+                            if 'video' in content_type:
+                                VIDEO_CACHE[cache_id] = file_data
+                                media_url = f"{host_url}api/video/{cache_id}"
+                            else:
+                                IMAGE_CACHE[cache_id] = file_data
+                                media_url = f"{host_url}api/image/{cache_id}"
+                            
+                            media_chunk = {
+                                "id": chat_id,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": model_name,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {"content": media_url},
+                                    "finish_reason": None
+                                }]
+                            }
+                            yield f"data: {json.dumps(media_chunk, ensure_ascii=False)}\n\n"
+                except Exception as e:
+                    import logging
+                    logging.warning(f"处理文件ID {file_id} 时出错: {e}")
+                    
+    except Exception as e:
+        error_chunk = {
+            "id": chat_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model_name,
+            "choices": [{
+                "index": 0,
+                "delta": {},
+                "finish_reason": "stop"
+            }],
+            "error": {"message": str(e)}
+        }
+        yield f"data: {json.dumps(error_chunk, ensure_ascii=False)}\n\n"
 
 
 def stream_chat_with_images(jwt: str, sess_name: str, message: str, 

@@ -1089,7 +1089,7 @@
             
             if (enabled) {
                 statusDiv.style.display = 'block';
-                statusText.innerHTML = '✓ 自动刷新已启用，系统将每30分钟检查一次过期 Cookie，使用临时邮箱自动刷新';
+                statusText.innerHTML = '✓ 自动刷新已启用，系统将每2小时检查一次过期 Cookie，使用临时邮箱自动刷新';
                 statusDiv.style.background = 'var(--success-light)';
             } else {
                 statusDiv.style.display = 'none';

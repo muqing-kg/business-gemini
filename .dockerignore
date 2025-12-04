@@ -50,9 +50,8 @@ geminibusiness.db
 log/
 *.log
 
-# 缓存目录（运行时通过卷挂载）
-image/
-video/
+# 数据目录（运行时通过卷挂载）
+data/
 static/uploads/
 
 # 敏感配置文件
