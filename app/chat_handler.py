@@ -139,6 +139,7 @@ def stream_chat_realtime_generator(jwt: str, sess_name: str, message: str,
                                    account_idx: Optional[int] = None, quota_type: Optional[str] = None,
                                    chat_id: str = None, created: int = None, model_name: str = None,
                                    host_url: str = None):
+    print(f"[DEBUG] stream_chat_realtime_generator called: message={message[:50] if message else 'None'}...")
     """实时流式生成器：边接收边解析边转发
     
     Args:

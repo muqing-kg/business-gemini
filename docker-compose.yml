@@ -15,13 +15,13 @@ services:
     # 设置user为root用户，确保有权限访问所有文件
     user: "root:root"
     environment:
-      - PYTHONUNBUFFERED=1
-      - DATABASE_PATH=/app/data/db/geminibusiness.db
+      PYTHONUNBUFFERED: "1"
+      DATABASE_PATH: /app/data/db/geminibusiness.db
       # 可选：设置 API 密钥加密密钥（32字节，生产环境建议设置）
       # 推荐使用 .env 文件或环境变量文件
-      # - API_KEY_ENCRYPTION_KEY=your-32-byte-encryption-key-here!!
+      # API_KEY_ENCRYPTION_KEY: your-32-byte-encryption-key-here!!
       # 可选：设置管理员密钥（如果不设置，系统会自动生成）
-      # - ADMIN_SECRET_KEY=your-admin-secret-key-here
+      # ADMIN_SECRET_KEY: your-admin-secret-key-here
     # 可选：使用 .env 文件（推荐）
     # env_file:
     #   - .env

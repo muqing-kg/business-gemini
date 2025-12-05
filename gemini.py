@@ -196,7 +196,7 @@ if __name__ == '__main__':
         # 启动临时邮箱自动刷新线程（每1小时检查过期 Cookie 并使用临时邮箱刷新）
         from app.cookie_refresh import start_auto_refresh_thread
         if start_auto_refresh_thread():
-            print("[✓] Cookie 自动刷新功能已启用（每1小时检查一次过期 Cookie，使用临时邮箱自动刷新）")
+            print("[✓] Cookie 自动刷新功能已启用（每2小时检查一次过期 Cookie，使用临时邮箱自动刷新）")
     elif auto_refresh_enabled and not PLAYWRIGHT_AVAILABLE:
         print("[!] 警告: 配置启用了自动刷新 Cookie，但 Playwright 未安装")
         print("    安装命令: pip install playwright && playwright install chromium")

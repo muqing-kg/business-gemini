@@ -299,6 +299,7 @@ def register_routes(app):
         ip_address = request.remote_addr
         endpoint = "/v1/chat/completions"
         request_size = len(request.data) if request.data else 0
+        print(f"[DEBUG] chat/completions called, request_size={request_size}")
         
         try:
             cleanup_expired_images()
@@ -628,8 +629,13 @@ def register_routes(app):
                     return jsonify({"error": f"所有账号请求失败: {error_message}"}), status_code
                 
                 def generate():
+                    print(f"[DEBUG] generate() started")
                     try:
+                        chunk_count = 0
                         for chunk in stream_generator:
+                            chunk_count += 1
+                            if chunk_count <= 3:
+                                print(f"[DEBUG] generate() yielding chunk {chunk_count}: {chunk[:100] if chunk else 'None'}...")
                             yield chunk
                         
                         end_chunk = {
