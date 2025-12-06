@@ -19,7 +19,8 @@ def upload_to_cfbed(
     upload_name_type: str = "default",
     return_format: str = "default",
     upload_folder: Optional[str] = None,
-    proxy: Optional[str] = None
+    proxy: Optional[str] = None,
+    auth_mode: str = "bearer"
 ) -> Dict[str, str]:
     """上传文件到 cfbed 服务
     
@@ -44,16 +45,20 @@ def upload_to_cfbed(
         Exception: 上传失败时抛出异常
     """
     # 构建查询参数
+    use_bearer = True
     params = {
-        "authCode": api_token,
         "uploadChannel": upload_channel,
         "serverCompress": str(server_compress).lower(),
         "autoRetry": str(auto_retry).lower(),
         "uploadNameType": upload_name_type,
         "returnFormat": return_format,
     }
+    if not use_bearer:
+        params["authCode"] = api_token
     if upload_folder:
-        params["uploadFolder"] = upload_folder
+        clean_folder = upload_folder.lstrip("/")
+        if clean_folder:
+            params["uploadFolder"] = clean_folder
     
     # 构建完整 URL
     url = f"{endpoint}?{'&'.join(f'{k}={v}' for k, v in params.items())}"
@@ -66,9 +71,13 @@ def upload_to_cfbed(
     proxies = {"http": proxy, "https": proxy} if proxy else None
     
     try:
+        headers = {}
+        if use_bearer:
+            headers["Authorization"] = f"Bearer {api_token}"
         resp = requests.post(
             url,
             files=files,
+            headers=headers,
             proxies=proxies,
             verify=False,
             timeout=300  # 5分钟超时，适合大文件
@@ -93,7 +102,8 @@ def upload_base64_to_cfbed(
     endpoint: str,
     api_token: str,
     proxy: Optional[str] = None,
-    upload_folder: Optional[str] = None
+    upload_folder: Optional[str] = None,
+    auth_mode: str = "bearer"
 ) -> Dict[str, str]:
     """从 base64 数据上传文件到 cfbed
     
@@ -121,7 +131,8 @@ def upload_base64_to_cfbed(
         endpoint=endpoint,
         api_token=api_token,
         upload_folder=upload_folder,
-        proxy=proxy
+        proxy=proxy,
+        auth_mode=auth_mode
     )
 
 
@@ -132,7 +143,8 @@ def upload_file_streaming_to_cfbed(
     endpoint: str,
     api_token: str,
     proxy: Optional[str] = None,
-    upload_folder: Optional[str] = None
+    upload_folder: Optional[str] = None,
+    auth_mode: str = "bearer"
 ) -> Dict[str, str]:
     """流式上传文件到 cfbed（适合大文件）
     
@@ -165,6 +177,6 @@ def upload_file_streaming_to_cfbed(
         endpoint=endpoint,
         api_token=api_token,
         upload_folder=upload_folder,
-        proxy=proxy
+        proxy=proxy,
+        auth_mode=auth_mode
     )
-

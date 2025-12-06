@@ -1050,6 +1050,7 @@
                 if (uploadFolderEl) {
                     uploadFolderEl.value = configData.upload_folder || '';
                 }
+                // 可选：后端支持 upload_auth_mode，但界面不暴露，保持 auto
                 const autoCleanupEl = document.getElementById('autoCleanupEnabled');
                 if (autoCleanupEl) {
                     autoCleanupEl.checked = !!configData.auto_cleanup_enabled;
@@ -1529,6 +1530,7 @@
                         upload_api_token: uploadApiToken,
                         image_base_url: imageBaseUrl,
                         upload_folder: uploadFolder,
+                        // upload_auth_mode: 'auto',
                         auto_cleanup_enabled: autoCleanupEnabled,
                         upload_retention_days: uploadRetentionDays,
                         // image_output_mode 移除，改为后端自动检测

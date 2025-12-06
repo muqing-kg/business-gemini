@@ -315,7 +315,8 @@ def stream_chat_realtime_generator(jwt: str, sess_name: str, message: str,
                             endpoint=upload_endpoint,
                             api_token=upload_api_token,
                             proxy=proxy,
-                            upload_folder=account_manager.config.get("upload_folder") if account_manager else None
+                            upload_folder=account_manager.config.get("upload_folder") if account_manager else None,
+                            auth_mode="bearer"
                         )
                         
                         image_base_url = account_manager.config.get("image_base_url", "").strip() if account_manager else ""
@@ -346,7 +347,7 @@ def stream_chat_realtime_generator(jwt: str, sess_name: str, message: str,
                         
                         # ✅ 实时发送图片 URL（作为字符串，兼容流式 API）
                         if chat_id and created is not None and model_name:
-                            image_url_text = f"\n{full_url}\n"
+                            image_url_text = f"\n![image]({full_url})\n"
                             image_chunk = {
                                 "id": chat_id,
                                 "object": "chat.completion.chunk",
@@ -408,7 +409,7 @@ def stream_chat_realtime_generator(jwt: str, sess_name: str, message: str,
                                         # 构建图片 URL
                                         base_url = get_image_base_url(host_url, account_manager, None)
                                         image_url = f"{base_url}image/{filename}"
-                                        image_url_text = f"\n{image_url}\n"
+                                        image_url_text = f"\n![image]({image_url})\n"
                                         image_chunk = {
                                             "id": chat_id,
                                             "object": "chat.completion.chunk",
@@ -669,7 +670,8 @@ def stream_chat_with_images(jwt: str, sess_name: str, message: str,
                                 endpoint=upload_endpoint,
                                 api_token=upload_api_token,
                                 proxy=proxy,
-                                upload_folder=account_manager.config.get("upload_folder") if account_manager else None
+                                upload_folder=account_manager.config.get("upload_folder") if account_manager else None,
+                                auth_mode="bearer"
                             )
                             
                             # 构建完整 URL
@@ -760,7 +762,8 @@ def parse_generated_media(gen_img: Dict, result: ChatResponse, proxy: Optional[s
                     endpoint=upload_endpoint,
                     api_token=upload_api_token,
                     proxy=proxy,
-                    upload_folder=account_manager.config.get("upload_folder") if account_manager else None
+                    upload_folder=account_manager.config.get("upload_folder") if account_manager else None,
+                    auth_mode="bearer"
                 )
                 
                 # 构建完整 URL
@@ -835,7 +838,8 @@ def parse_image_from_content(content: Dict, result: ChatResponse, proxy: Optiona
                         endpoint=upload_endpoint,
                         api_token=upload_api_token,
                         proxy=proxy,
-                        upload_folder=account_manager.config.get("upload_folder") if account_manager else None
+                        upload_folder=account_manager.config.get("upload_folder") if account_manager else None,
+                        auth_mode="bearer"
                     )
                     
                     # 构建完整 URL
@@ -921,7 +925,8 @@ def parse_attachment(att: Dict, result: ChatResponse, proxy: Optional[str] = Non
                     endpoint=upload_endpoint,
                     api_token=upload_api_token,
                     proxy=proxy,
-                    upload_folder=account_manager.config.get("upload_folder") if account_manager else None
+                    upload_folder=account_manager.config.get("upload_folder") if account_manager else None,
+                    auth_mode="bearer"
                 )
                 
                 # 构建完整 URL
@@ -1045,210 +1050,26 @@ def get_image_base_url(fallback_host_url: str, account_manager=None, request=Non
 
 
 def detect_client_image_format(request=None, request_data=None) -> str:
-    """检测客户端支持的图片格式
-    
-    检测优先级：
-    1. 请求参数中的 image_format 或 response_format（显式指定）
-    2. User-Agent 检测（已知客户端）- 优先于消息格式检测
-    3. 检查客户端发送的消息格式（如果发送数组格式，说明支持数组格式）
-    4. 默认使用数组格式（OpenAI 标准格式）
-    
-    Args:
-        request: Flask request 对象
-        request_data: 请求的 JSON 数据
-    
-    Returns:
-        "array" - 数组格式（OpenAI 标准）
-        "markdown" - Markdown 格式
-        "url" - 纯 URL 格式
-    """
-    # 1. 检查请求参数中的格式偏好（最高优先级）
-    if request_data:
-        image_format = request_data.get('image_format') or request_data.get('response_format')
-        if image_format in ['array', 'markdown', 'url']:
-            return image_format
-    
-    if not request:
-        return "array"  # 默认使用数组格式
-    
-    # 2. User-Agent 检测（已知客户端）- 优先于消息格式检测
-    # 这样可以确保已知客户端（如 Cherry Studio）的格式不会被消息格式覆盖
-    user_agent = request.headers.get('User-Agent', '').lower()
-    
-    # 已知需要 Markdown 格式的客户端（优先检查，避免被消息格式覆盖）
-    markdown_format_clients = [
-        'cherry',  # Cherry Studio
-        'studio',  # 某些 Studio 客户端
-    ]
-    
-    # 已知支持数组格式的客户端
-    array_format_clients = [
-        'cursor',  # Cursor IDE
-        'vscode',  # VS Code
-        'chatgpt',  # ChatGPT
-        'openai',  # OpenAI 官方客户端
-        'anthropic',  # Claude
-    ]
-    
-    # 优先检查 Markdown 格式客户端（因为 Cherry Studio 上传图片时也会发送数组格式）
-    for client in markdown_format_clients:
-        if client in user_agent:
-            return "markdown"
-    
-    # 检查数组格式客户端
-    for client in array_format_clients:
-        if client in user_agent:
-            return "array"
-    
-    # 3. 检查客户端发送的消息格式（如果发送数组格式，说明支持数组格式）
-    # 注意：这个检查在 User-Agent 检测之后，避免覆盖已知客户端
-    if request_data:
-        messages = request_data.get('messages', [])
-        for msg in messages:
-            content = msg.get('content', '')
-            # 如果消息内容是数组格式，说明客户端支持数组格式
-            if isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict) and item.get('type') in ['text', 'image_url', 'file']:
-                        return "array"  # 客户端支持数组格式
-    
-    # 4. 检查 Accept 头（某些客户端可能通过 Accept 头表明支持的格式）
-    accept = request.headers.get('Accept', '').lower()
-    if 'application/json' in accept and 'text/markdown' not in accept:
-        # 如果只接受 JSON，可能支持数组格式
-        return "array"
-    
-    # 5. 默认使用数组格式（OpenAI 标准格式）
-    return "array"
+    return "markdown"
 
 
 def build_openai_response_content(chat_response: ChatResponse, host_url: str, account_manager=None, request=None, request_data=None):
-    """构建OpenAI格式的响应内容
-    
-    如果有图片/视频，根据客户端支持的格式返回：
-    - 数组格式：[{type: "text", text: "..."}, {type: "image_url", image_url: {url: "..."}}]
-    - Markdown 格式：![image](url)
-    - URL 格式：直接返回图片 URL
-    
-    如果没有图片，返回纯文本字符串
-    
-    返回: str | List[Dict] - 纯文本或内容数组
-    """
     result_text = chat_response.text
-    
-    # 检测客户端支持的图片格式
-    image_format = detect_client_image_format(request, request_data)
-    
-    # 如果有图片或视频
     if chat_response.images:
         base_url = get_image_base_url(host_url, account_manager, request)
-        
-        # 根据检测到的格式返回不同的内容
-        if image_format == "markdown":
-            markdown_parts = []
-            if result_text and result_text.strip():
-                markdown_parts.append(result_text)
-            
-            # 添加 Markdown 格式的图片链接
-            for img in chat_response.images:
-                # 优先使用 base64 格式（如果存在），这样客户端可以直接显示图片
-                if img.base64_data:
-                    # 使用 base64 data URL 格式，让客户端可以直接显示图片
-                    mime_type = img.mime_type or "image/png"
-                    base64_url = f"data:{mime_type};base64,{img.base64_data}"
-                    markdown_parts.append(f"![image]({base64_url})")
-                elif img.url:
-                    # 使用普通 URL
-                    markdown_parts.append(f"![image]({img.url})")
-                elif img.file_name:
-                    # 本地缓存，构建本地 URL
-                    if img.media_type == "video":
-                        media_url = f"{base_url}video/{img.file_name}"
-                    else:
-                        media_url = f"{base_url}image/{img.file_name}"
-                    markdown_parts.append(f"![image]({media_url})")
-                else:
-                    continue  # 跳过没有 URL 或 base64 的图片
-            
-            # 返回 Markdown 格式的文本
-            return "\n\n".join(markdown_parts) if markdown_parts else result_text
-        
-        elif image_format == "url":
-            # URL 格式：直接返回图片 URL（每行一个）
-            url_parts = []
-            if result_text and result_text.strip():
-                url_parts.append(result_text)
-            
-            # 添加图片 URL（每行一个）
-            for img in chat_response.images:
-                if img.url:
-                    url_parts.append(img.url)
-                elif img.file_name:
-                    if img.media_type == "video":
-                        media_url = f"{base_url}video/{img.file_name}"
-                    else:
-                        media_url = f"{base_url}image/{img.file_name}"
-                    url_parts.append(media_url)
-                elif img.base64_data:
-                    # base64 格式也作为 URL 返回
-                    mime_type = img.mime_type or "image/png"
-                    base64_url = f"data:{mime_type};base64,{img.base64_data}"
-                    url_parts.append(base64_url)
-                else:
-                    continue  # 跳过没有 URL 或 base64 的图片
-            
-            # 返回 URL 格式的文本（每行一个 URL）
-            return "\n".join(url_parts) if url_parts else result_text
-        
-        # 默认使用数组格式（标准 OpenAI 格式）
-        content_array = []
-        
-        # 如果有文本，先添加文本部分
+        markdown_parts = []
         if result_text and result_text.strip():
-            content_array.append({
-                "type": "text",
-                "text": result_text
-            })
-        
-        # 添加图片/视频部分
+            markdown_parts.append(result_text)
         for img in chat_response.images:
-            # 优先使用 base64 格式（如果存在），这样客户端可以直接显示图片
-            # 如果客户端支持 base64，会直接显示；如果不支持，会回退到 URL
-            if img.base64_data:
-                # 使用 base64 data URL 格式，让客户端可以直接显示图片
-                mime_type = img.mime_type or "image/png"
-                base64_url = f"data:{mime_type};base64,{img.base64_data}"
-                content_array.append({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": base64_url
-                    }
-                })
-            elif img.url:
-                # 使用普通 URL
-                content_array.append({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": img.url
-                    }
-                })
+            if img.url:
+                markdown_parts.append(f"![image]({img.url})")
             elif img.file_name:
-                # 本地缓存，构建本地 URL
                 if img.media_type == "video":
                     media_url = f"{base_url}video/{img.file_name}"
                 else:
                     media_url = f"{base_url}image/{img.file_name}"
-                content_array.append({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": media_url
-                    }
-                })
+                markdown_parts.append(f"![image]({media_url})")
             else:
-                continue  # 跳过没有 URL 或 base64 的图片
-        
-        # 如果只有图片没有文本，返回数组；如果有文本，也返回数组
-        return content_array if content_array else result_text
-    
-    # 没有图片，返回纯文本
+                continue
+        return "\n\n".join(markdown_parts) if markdown_parts else result_text
     return result_text

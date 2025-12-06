@@ -1859,6 +1859,12 @@ def register_routes(app):
             account_manager.config["upload_api_token"] = data["upload_api_token"]
         if "upload_folder" in data:
             account_manager.config["upload_folder"] = data["upload_folder"] or None
+        if "upload_auth_mode" in data:
+            # 可选值: auto | auth_code | bearer
+            val = (data["upload_auth_mode"] or "auto").lower()
+            if val not in ("auto", "auth_code", "bearer"):
+                val = "auto"
+            account_manager.config["upload_auth_mode"] = val
         if "auto_cleanup_enabled" in data:
             account_manager.config["auto_cleanup_enabled"] = bool(data["auto_cleanup_enabled"])
         if "upload_retention_days" in data:

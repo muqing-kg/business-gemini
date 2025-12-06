@@ -238,7 +238,7 @@ console.log('JavaScript 开始加载...');
             const typingId = showTypingIndicator();
             
             let aiMessageId = null;
-            let fullContent = '';
+            let fullParts = [];
 
             abortController = new AbortController();
             console.log('开始发送流式请求...');
@@ -312,28 +312,21 @@ console.log('JavaScript 开始加载...');
                                     
                                     // 处理不同类型的 content
                                     if (typeof content === 'string') {
-                                        // 纯文本内容
-                                        fullContent += content;
+                                        fullParts.push({ type: 'text', text: content });
                                     } else if (typeof content === 'object' && content !== null) {
-                                        // 可能是图片/视频对象格式：{type: "image_url", image_url: {url: "..."}}
                                         if (content.type === 'image_url' && content.image_url?.url) {
-                                            const imageUrl = content.image_url.url;
-                                            // 将图片URL追加到内容中（换行分隔）
-                                            if (fullContent && !fullContent.endsWith('\n')) {
-                                                fullContent += '\n';
-                                            }
-                                            fullContent += imageUrl + '\n';
+                                            fullParts.push({ type: 'image_url', image_url: { url: content.image_url.url } });
                                         } else {
-                                            // 其他对象类型，转换为字符串
                                             console.warn('[流式响应] 收到未知的 content 对象:', content);
-                                            fullContent += JSON.stringify(content);
+                                            fullParts.push({ type: 'text', text: JSON.stringify(content) });
                                         }
                                     }
                                     
-                                    updateAIBubble(aiMessageId, fullContent);
+                                    updateAIBubble(aiMessageId, fullParts);
                                 }
                             } catch (e) {
                                 // 忽略解析错误
+                                
                             }
                         }
                     }
@@ -366,11 +359,9 @@ console.log('JavaScript 开始加载...');
                 removeTypingIndicator(typingId);
             }
 
-            // 保存到历史记录（确保 fullContent 是字符串）
-            if (fullContent) {
-                // 确保保存的是字符串，而不是对象
-                const contentToSave = typeof fullContent === 'string' ? fullContent : String(fullContent);
-                chatHistory.push({ role: 'ai', content: contentToSave, time: new Date().toISOString() });
+            // 保存到历史记录（可保存数组结构，便于媒体渲染）
+            if (fullParts && fullParts.length > 0) {
+                chatHistory.push({ role: 'ai', content: fullParts, time: new Date().toISOString() });
                 saveChatHistory();
             }
         }
@@ -543,7 +534,11 @@ console.log('JavaScript 开始加载...');
             
             const bubbleDiv = document.createElement('div');
             bubbleDiv.className = 'bubble';
-            bubbleDiv.textContent = content;
+            if (role === 'ai') {
+                bubbleDiv.innerHTML = parseContentWithMedia(content);
+            } else {
+                bubbleDiv.textContent = content;
+            }
             
             const timeDiv = document.createElement('div');
             timeDiv.className = 'timestamp';
@@ -602,40 +597,32 @@ console.log('JavaScript 开始加载...');
 
         function updateAIBubble(messageId, content) {
             const bubble = document.getElementById(messageId + '-bubble');
-            if (bubble) {
-                // 确保 content 是字符串
-                let contentStr = content;
-                if (typeof content !== 'string') {
-                    // 如果是对象，尝试转换为字符串
-                    if (typeof content === 'object' && content !== null) {
-                        if (content.type === 'image_url' && content.image_url?.url) {
-                            contentStr = content.image_url.url;
-                        } else {
-                            contentStr = JSON.stringify(content);
-                        }
-                    } else {
-                        contentStr = String(content);
+            if (!bubble) return;
+            let payload = content;
+            if (Array.isArray(content)) {
+                const filtered = content.filter(item => {
+                    if (item && item.type === 'text') {
+                        const t = String(item.text || '').replace(/`+/g, '').trim();
+                        return t.length > 0;
                     }
-                }
-                
-                // 解析内容，将多媒体 URL 转换为元素
-                bubble.innerHTML = parseContentWithMedia(contentStr);
-                const container = document.getElementById('chatContainer');
-                container.scrollTop = container.scrollHeight;
+                    return true;
+                });
+                payload = filtered;
             }
+            bubble.innerHTML = parseContentWithMedia(payload);
+            const container = document.getElementById('chatContainer');
+            container.scrollTop = container.scrollHeight;
         }
 
         // 解析内容中的媒体 URL 并转换为 HTML
         function parseContentWithMedia(content) {
-            // 确保 content 是字符串
             if (typeof content !== 'string') {
                 if (typeof content === 'object' && content !== null) {
-                    // 如果是对象数组（OpenAI 格式）
                     if (Array.isArray(content)) {
                         const parts = [];
                         for (const item of content) {
                             if (item.type === 'text' && item.text) {
-                                parts.push(escapeHtml(item.text));
+                                parts.push(renderTextWithMedia(item.text));
                             } else if (item.type === 'image_url' && item.image_url?.url) {
                                 const url = item.image_url.url;
                                 parts.push(`<div class="ai-image-container"><img src="${escapeHtml(url)}" alt="AI生成的图片" style="max-width: 300px; max-height: 300px; border-radius: 8px; cursor: pointer; margin: 8px 0;" onclick="window.open('${escapeHtml(url)}', '_blank')" onerror="this.style.display='none'; this.nextSibling.style.display='inline';"><span style="display:none;">${escapeHtml(url)}</span></div>`);
@@ -643,42 +630,61 @@ console.log('JavaScript 开始加载...');
                         }
                         return parts.join('<br>');
                     }
-                    // 单个对象
                     if (content.type === 'image_url' && content.image_url?.url) {
                         const url = content.image_url.url;
                         return `<div class="ai-image-container"><img src="${escapeHtml(url)}" alt="AI生成的图片" style="max-width: 300px; max-height: 300px; border-radius: 8px; cursor: pointer; margin: 8px 0;" onclick="window.open('${escapeHtml(url)}', '_blank')" onerror="this.style.display='none'; this.nextSibling.style.display='inline';"><span style="display:none;">${escapeHtml(url)}</span></div>`;
                     }
-                    return escapeHtml(JSON.stringify(content));
+                    return renderTextWithMedia(JSON.stringify(content));
                 }
                 content = String(content);
             }
-            
-            const imageUrlRegex = /(https?:\/\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|bmp|svg))/gi;
-            const videoUrlRegex = /(https?:\/\/[^\s]+\.(?:mp4|mov|webm|mkv|avi))/gi;
-            
-            // 将内容按行分割处理
-            const lines = content.split('\n');
-            const processedLines = lines.map(line => {
-                // 检查该行是否是纯图片URL
-                const trimmedLine = line.trim();
-                if (imageUrlRegex.test(trimmedLine) && trimmedLine.match(imageUrlRegex)?.[0] === trimmedLine) {
-                    // 重置正则表达式的lastIndex
-                    imageUrlRegex.lastIndex = 0;
-                    // 该行是纯图片URL，转换为图片元素
-                    return `<div class="ai-image-container"><img src="${escapeHtml(trimmedLine)}" alt="AI生成的图片" style="max-width: 300px; max-height: 300px; border-radius: 8px; cursor: pointer; margin: 8px 0;" onclick="window.open('${escapeHtml(trimmedLine)}', '_blank')" onerror="this.style.display='none'; this.nextSibling.style.display='inline';"><span style="display:none;">${escapeHtml(trimmedLine)}</span></div>`;
+            return renderTextWithMedia(content);
+        }
+
+        function renderTextWithMedia(text) {
+            let t = String(text || '');
+            t = t.replace(/`+/g, '');
+            const imgRe = /(https?:\/\/[^\s)]+\.(?:png|jpg|jpeg|gif|webp|bmp|svg))/gi;
+            const mdImgRe = /!\[[^\]]*\]\((https?:\/\/[^\s)]+)\)/gi;
+            const mdDataImgRe = /!\[[^\]]*\]\((data:[^)]+)\)/gi;
+            const vidRe = /(https?:\/\/[^\s)]+\.(?:mp4|mov|webm|mkv|avi))/gi;
+            const parts = [];
+            let lastIndex = 0;
+            const pushEscaped = (s) => { if (s) parts.push(escapeHtml(s)); };
+            const replaceWith = (match, isVideo) => {
+                if (isVideo) {
+                    parts.push(`<div class="ai-video-container"><video controls preload="metadata" style="max-width: 360px; border-radius: 12px;"><source src="${escapeHtml(match)}" type="video/mp4">您的浏览器不支持视频播放。<a href="${escapeHtml(match)}" target="_blank" rel="noopener">点击下载</a></video></div>`);
+                } else {
+                    parts.push(`<div class="ai-image-container"><img src="${escapeHtml(match)}" alt="AI生成的图片" style="max-width: 300px; max-height: 300px; border-radius: 8px; cursor: pointer; margin: 8px 0;" onclick="window.open('${escapeHtml(match)}', '_blank')" onerror="this.style.display='none'; this.nextSibling.style.display='inline';"><span style="display:none;">${escapeHtml(match)}</span></div>`);
                 }
-                videoUrlRegex.lastIndex = 0;
-                if (videoUrlRegex.test(trimmedLine) && trimmedLine.match(videoUrlRegex)?.[0] === trimmedLine) {
-                    videoUrlRegex.lastIndex = 0;
-                    return `<div class="ai-video-container"><video controls preload="metadata" style="max-width: 360px; border-radius: 12px;"><source src="${escapeHtml(trimmedLine)}" type="video/mp4">您的浏览器不支持视频播放。<a href="${escapeHtml(trimmedLine)}" target="_blank" rel="noopener">点击下载</a></video></div>`;
+            };
+            const combineMatches = (pattern, isVideo) => {
+                pattern.lastIndex = 0;
+                for (const m of t.matchAll(pattern)) {
+                    const start = m.index || 0;
+                    const end = start + m[0].length;
+                    pushEscaped(t.slice(lastIndex, start));
+                    replaceWith(m[0], isVideo);
+                    lastIndex = end;
                 }
-                // 重置正则表达式的lastIndex
-                imageUrlRegex.lastIndex = 0;
-                // 普通文本行，转义HTML
-                return escapeHtml(line);
-            });
-            
-            return processedLines.join('<br>');
+            };
+            const combineMatchesGroup = (pattern, groupIndex, isVideo) => {
+                pattern.lastIndex = 0;
+                for (const m of t.matchAll(pattern)) {
+                    const start = m.index || 0;
+                    const end = start + m[0].length;
+                    const url = m[groupIndex];
+                    pushEscaped(t.slice(lastIndex, start));
+                    replaceWith(url, isVideo);
+                    lastIndex = end;
+                }
+            };
+            combineMatches(imgRe, false);
+            combineMatchesGroup(mdImgRe, 1, false);
+            combineMatchesGroup(mdDataImgRe, 1, false);
+            combineMatches(vidRe, true);
+            pushEscaped(t.slice(lastIndex));
+            return parts.join('');
         }
 
         // HTML转义函数

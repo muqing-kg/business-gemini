@@ -3,19 +3,20 @@ import time
 from datetime import datetime, timedelta
 from typing import Dict, Any
 
-from .cfbed_upload import upload_to_cfbed
 import requests
 
-def _delete_on_cfbed(src: str, endpoint: str, api_token: str, proxy: str = None) -> bool:
+def _delete_on_cfbed(src: str, endpoint: str, api_token: str, proxy: str = None, is_folder: bool = False) -> bool:
     try:
         base = endpoint.rstrip('/').replace('/upload', '')
-        url = f"{base}/delete"
-        data = {"authCode": api_token, "src": src}
+        path = src.lstrip('/')
+        # 删除 API: /api/manage/delete/{path}?folder=true
+        url = f"{base}/api/manage/delete/{path}"
+        if is_folder:
+            url += "?folder=true"
+        headers = {"Authorization": f"Bearer {api_token}"}
         proxies = {"http": proxy, "https": proxy} if proxy else None
-        resp = requests.post(url, json=data, proxies=proxies, verify=False, timeout=60)
-        if resp.status_code == 200:
-            return True
-        return False
+        resp = requests.delete(url, headers=headers, proxies=proxies, verify=False, timeout=60)
+        return resp.status_code == 200
     except Exception:
         return False
 
