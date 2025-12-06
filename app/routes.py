@@ -10,6 +10,7 @@ import mimetypes
 import re
 import secrets
 import traceback
+import base64
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pathlib import Path
@@ -45,7 +46,7 @@ from .auth import (
 from . import auth
 
 # 导入会话管理
-from .session_manager import ensure_session_for_account, upload_file_to_gemini, upload_inline_image_to_gemini
+from .session_manager import ensure_session_for_account, ensure_jwt_for_account, upload_file_to_gemini, upload_inline_image_to_gemini
 
 # 导入聊天处理
 from .chat_handler import (
@@ -299,7 +300,6 @@ def register_routes(app):
         ip_address = request.remote_addr
         endpoint = "/v1/chat/completions"
         request_size = len(request.data) if request.data else 0
-        print(f"[DEBUG] chat/completions called, request_size={request_size}")
         
         try:
             cleanup_expired_images()
@@ -311,7 +311,10 @@ def register_routes(app):
             is_auto_model = requested_model in auto_model_aliases
             messages = data.get('messages', [])
             prompts = data.get('prompts', [])
-            stream = data.get('stream', False)
+            if 'stream' in data:
+                stream = bool(data.get('stream'))
+            else:
+                stream = bool(account_manager.config.get('chat_stream_enabled', True))
             
             models_config = account_manager.config.get("models", [])
             selected_model_config = None
@@ -388,6 +391,7 @@ def register_routes(app):
                         input_images.extend(images_from_files)
             
             gemini_file_ids = []
+            file_sessions = []  # 记录文件关联的 session，用于后续复用会话
             for fid in input_file_ids:
                 if not fid:
                     continue
@@ -401,16 +405,28 @@ def register_routes(app):
                     gemini_file_ids.append(fid)
                 elif fid.startswith('file-'):
                     # OpenAI 格式，通过 file_manager 转换
-                    gemini_fid = file_manager.get_gemini_file_id(fid)
-                    if gemini_fid:
-                        gemini_file_ids.append(gemini_fid)
+                    file_info = file_manager.get_file(fid)
+                    if file_info:
+                        gemini_fid = file_info.get("gemini_file_id")
+                        file_session = file_info.get("session_name")
+                        if gemini_fid:
+                            gemini_file_ids.append(gemini_fid)
+                        if file_session:
+                            file_sessions.append(file_session)
+                            print(f"[检测] 📎 文件 {fid} 关联的 session: {file_session}")
                     else:
                         print(f"[警告] 文件ID {fid} 在文件管理器中未找到，可能已过期或不存在")
                 else:
                     # 其他格式，尝试通过 file_manager 转换
-                    gemini_fid = file_manager.get_gemini_file_id(fid)
-                    if gemini_fid:
-                        gemini_file_ids.append(gemini_fid)
+                    file_info = file_manager.get_file(fid)
+                    if file_info:
+                        gemini_fid = file_info.get("gemini_file_id")
+                        file_session = file_info.get("session_name")
+                        if gemini_fid:
+                            gemini_file_ids.append(gemini_fid)
+                        if file_session:
+                            file_sessions.append(file_session)
+                            print(f"[检测] 📎 文件 {fid} 关联的 session: {file_session}")
                     else:
                         # 如果转换失败，假设是 Gemini fileId（兼容性处理）
                         print(f"[警告] 文件ID {fid} 格式未知，尝试直接使用（可能是 Gemini fileId）")
@@ -436,9 +452,13 @@ def register_routes(app):
             conversation_id = data.get('conversation_id')
             is_new_conversation = data.get('is_new_conversation', False)
             
+            # 检测是否有图片输入
+            has_images = bool(input_images or input_file_ids or gemini_file_ids)
+            
             # 如果前端没有传递 conversation_id，则根据消息内容自动生成
             # 注意：对于其他客户端（如 Cursor、Cherry Studio），如果没有传递 conversation_id，
             # 我们使用第一条用户消息内容生成稳定的 ID，确保同一对话的后续请求使用相同的 ID
+            content = ""  # 初始化 content 变量，用于后续检查
             if not conversation_id and messages:
                 user_count = sum(1 for msg in messages if msg.get('role') == 'user')
                 assistant_count = sum(1 for msg in messages if msg.get('role') == 'assistant')
@@ -452,29 +472,52 @@ def register_routes(app):
                 is_new_conversation = (user_count == 1 and assistant_count == 0 and total_count == 1)
                 
                 if first_user_msg:
-                    # 始终使用第一条用户消息内容生成稳定的 ID（不包含时间戳）
-                    # 这样同一对话的后续请求会使用相同的 ID，即使客户端没有传递 conversation_id
-                    content = str(first_user_msg.get('content', ''))
-                    # 如果内容是数组（包含文件等），提取文本部分
-                    if isinstance(first_user_msg.get('content'), list):
+                    # 按照 Gemini-Link-System 的逻辑：只使用第一条消息的文本部分生成会话键
+                    # 完全忽略图片，因为图片上传到 session 后会持久化，不需要参与会话键计算
+                    raw_content = first_user_msg.get('content', '')
+                    content = ""
+                    
+                    # 如果内容是数组（包含文件等），只提取文本部分，完全忽略图片
+                    if isinstance(raw_content, list):
                         text_parts = []
-                        for item in first_user_msg.get('content', []):
-                            if isinstance(item, dict):
-                                if item.get('type') == 'text':
-                                    text_parts.append(str(item.get('text', '')))
-                                elif item.get('type') == 'file':
-                                    # 文件类型也参与ID生成，确保唯一性
-                                    file_id = item.get('file', {}).get('id') or item.get('file_id', '')
-                                    text_parts.append(f"file:{file_id}")
-                        content = '|'.join(text_parts) if text_parts else str(first_user_msg.get('content', ''))
-                    conversation_id = hashlib.md5(content.encode('utf-8')).hexdigest()[:16]
+                        for item in raw_content:
+                            if isinstance(item, dict) and item.get('type') == 'text':
+                                text_parts.append(str(item.get('text', '')))
+                        # 只使用文本部分，忽略所有图片/文件
+                        content = '|'.join(text_parts) if text_parts else ""
+                    else:
+                        # 如果是字符串，需要移除 base64 图片数据
+                        content_str = str(raw_content)
+                        # 移除 base64 图片数据 URL
+                        base64_pattern = r'data:image/[^;]+;base64,[A-Za-z0-9+/=\s]+'
+                        text_only = re.sub(base64_pattern, '', content_str, flags=re.MULTILINE)
+                        # 清理多余的空白字符
+                        content = re.sub(r'\s+', ' ', text_only).strip()
+                    
+                    # 如果内容为空，使用 "empty"（类似 Gemini-Link-System）
+                    if not content:
+                        content = "empty"
+                    
+                    # 生成 conversation_id（使用 MD5，类似 Gemini-Link-System）
+                    generated_id = hashlib.md5(content.encode('utf-8')).hexdigest()[:16]
+                    conversation_id = generated_id
+                    
+                    # 打印 conversation_id 生成内容（用于调试）
+                    print(f"[检测] 🔍 conversation_id 生成内容: {content[:200]}... (长度: {len(content)}, has_images={has_images})")
+                    print(f"[检测] 🔍 conversation_id MD5 结果: {conversation_id}")
                 
                 if is_new_conversation:
                     print(f"[聊天] 检测到新对话（user={user_count}, assistant={assistant_count}, system={system_count}, total={total_count}），对话ID: {conversation_id}，将创建新的 session")
+                    if has_images:
+                        print(f"[检测] ⚠️ 新对话包含图片输入（input_images={len(input_images)}, input_file_ids={len(input_file_ids)}, gemini_file_ids={len(gemini_file_ids)}）")
                 elif conversation_id:
                     print(f"[聊天] 继续对话，对话ID: {conversation_id}")
+                    if has_images:
+                        print(f"[检测] ℹ️ 继续对话包含图片输入（input_images={len(input_images)}, input_file_ids={len(input_file_ids)}, gemini_file_ids={len(gemini_file_ids)}）")
             elif conversation_id:
                 print(f"[聊天] 使用前端传递的对话ID: {conversation_id}, 新对话: {is_new_conversation}")
+                if has_images:
+                    print(f"[检测] ℹ️ 前端传递的对话包含图片输入（input_images={len(input_images)}, input_file_ids={len(input_file_ids)}, gemini_file_ids={len(gemini_file_ids)}），is_new_conversation={is_new_conversation}")
             
             preferred_account_idx = None
             if selected_model_config and "account_index" in selected_model_config:
@@ -514,14 +557,97 @@ def register_routes(app):
                         # 根据请求类型选择对应配额类型可用的账号
                         account_idx, account = account_manager.get_next_account(required_quota_type)
                     
-                    session, jwt, team_id = ensure_session_for_account(account_idx, account, force_new=is_new_conversation, conversation_id=conversation_id)
+                    # ⚠️ 特殊处理：如果当前请求是新对话且有文本（不是 "empty"），
+                    # 检查是否有 "empty" 会话键的 session（可能是之前只有图片的请求创建的）
+                    # 如果有，复用该 session，确保图片在同一个 session 中可见
+                    should_check_empty_session = (
+                        is_new_conversation and  # 是新对话
+                        account_idx is not None and  # 已选择账号
+                        not data.get('conversation_id') and  # 客户端没有传递 conversation_id
+                        content and  # 有文本内容
+                        content != "empty"  # 不是 "empty"
+                    )
+                    
+                    if should_check_empty_session:
+                        # 计算 "empty" 的 conversation_id
+                        empty_id = hashlib.md5("empty".encode('utf-8')).hexdigest()[:16]
+                        with account_manager.lock:
+                            if account_idx in account_manager.conversation_sessions:
+                                if empty_id in account_manager.conversation_sessions[account_idx]:
+                                    existing_session = account_manager.conversation_sessions[account_idx][empty_id]
+                                    print(f"[检测] 🔍 找到已存在的'只有图片'的 session: {existing_session} (conversation_id={empty_id})")
+                                    print(f"[检测] 🔍 将使用该 session 而不是创建新的 (原 conversation_id={conversation_id})")
+                                    # 使用已存在的 session 的 conversation_id
+                                    conversation_id = empty_id
+                                    is_new_conversation = False  # 不是新对话，是继续对话
+                    
+                    # 按照 Gemini-Link-System 的逻辑：
+                    # 图片上传到 session 后会持久化，不需要特殊处理
+                    # 如果找到缓存的 session，直接复用，图片已经在 session 中了
+                    
+                    # 调试：检测图片输入时的会话创建
+                    if has_images and is_new_conversation:
+                        print(f"[检测] ⚠️ 图片输入 + 新对话：force_new=True, conversation_id={conversation_id}")
+                    elif has_images and not is_new_conversation:
+                        print(f"[检测] ℹ️ 图片输入 + 继续对话：force_new=False, conversation_id={conversation_id}")
+                    
+                    # ⚠️ 重要：如果使用了 file_id，且文件关联了 session，应该使用该 session
+                    # 而不是创建新的 session，否则文件在旧 session 中，聊天在新 session 中，会看不到文件
+                    use_file_session = None
+                    if file_sessions and len(file_sessions) > 0:
+                        # 使用第一个文件的 session（如果所有文件都在同一个 session 中）
+                        use_file_session = file_sessions[0]
+                        # 检查是否所有文件都在同一个 session 中
+                        if len(set(file_sessions)) > 1:
+                            print(f"[警告] ⚠️ 多个文件关联了不同的 session: {set(file_sessions)}，将使用第一个: {use_file_session}")
+                        print(f"[检测] 📎 检测到文件关联的 session: {use_file_session}，将使用该 session 进行聊天")
+                    
+                    if use_file_session:
+                        # 使用文件关联的 session，而不是创建新的
+                        jwt = ensure_jwt_for_account(account_idx, account)
+                        session = use_file_session
+                        team_id = account.get("team_id")
+                        print(f"[检测] ✓ 使用文件关联的 session: {session}（跳过会话创建）")
+                    else:
+                        # 正常创建或复用 session
+                        session, jwt, team_id = ensure_session_for_account(account_idx, account, force_new=is_new_conversation, conversation_id=conversation_id)
                     from .utils import get_proxy
                     proxy = get_proxy()
                     
-                    for img in input_images:
-                        uploaded_file_id = upload_inline_image_to_gemini(jwt, session, team_id, img, proxy, account_idx)
-                        if uploaded_file_id:
-                            gemini_file_ids.append(uploaded_file_id)
+                    # 按照 Gemini-Link-System 的逻辑：如果有图片且还没上传到当前 Session，先上传
+                    # 注意：如果 session 是复用的，图片可能已经在 session 中了，但这次请求有新的图片，需要上传
+                    if input_images:
+                        for img in input_images:
+                            uploaded_file_id = upload_inline_image_to_gemini(jwt, session, team_id, img, proxy, account_idx)
+                            if uploaded_file_id:
+                                gemini_file_ids.append(uploaded_file_id)
+                                # 保存文件到 file_manager，关联 session（用于后续复用）
+                                if file_manager:
+                                    # 从图片数据中获取信息
+                                    mime_type = img.get("mime_type", "image/png")
+                                    if img.get("type") == "base64":
+                                        # 计算 base64 数据的大小
+                                        data = img.get("data", "")
+                                        size = len(base64.b64decode(data)) if data else 0
+                                    elif img.get("type") == "url":
+                                        # URL 类型，无法直接获取大小，使用 0
+                                        size = 0
+                                    else:
+                                        size = 0
+                                    
+                                    # 生成文件名
+                                    ext_map = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp"}
+                                    ext = ext_map.get(mime_type, ".png")
+                                    filename = f"inline_{uploaded_file_id}{ext}"
+                                    
+                                    file_manager.add_file(
+                                        openai_file_id=f"file-{uploaded_file_id}",  # 使用 OpenAI 格式的 file_id
+                                        gemini_file_id=uploaded_file_id,
+                                        session_name=session,
+                                        filename=filename,
+                                        mime_type=mime_type,
+                                        size=size
+                                    )
                     
                     api_model_id = None
                     if selected_model_config and not try_without_model_id:
@@ -537,11 +663,14 @@ def register_routes(app):
                         request_quota_type = "videos"
                     # 文本查询不需要指定配额类型（429 错误时冷却整个账号）
                     
-                    # 流式模式：使用真正的流式生成器（边接收边解析边转发）
+                    # ✅ 流式模式：使用真正的流式生成器（边接收边解析边转发）
                     # 非流式模式：使用原来的函数（先收集完整响应再返回）
                     if stream:
+                        # 准备流式生成器的参数
                         chat_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
                         created_ts = int(time.time())
+                        
+                        # 使用真正的流式生成器
                         stream_generator = stream_chat_realtime_generator(
                             jwt, session, user_message, proxy, team_id, 
                             gemini_file_ids, api_model_id, account_manager, 
@@ -550,9 +679,11 @@ def register_routes(app):
                             host_url=request.host_url
                         )
                         successful_account_idx = account_idx
-                        chat_response = None
+                        # 流式响应将在下面的 if stream 块中处理
+                        chat_response = None  # 流式模式下不需要完整响应
                         break
                     else:
+                        # 非流式模式：使用原来的函数
                         chat_response = stream_chat_with_images(jwt, session, user_message, proxy, team_id, gemini_file_ids, api_model_id, account_manager, account_idx, request_quota_type)
                         successful_account_idx = account_idx
                         break
@@ -621,23 +752,25 @@ def register_routes(app):
                         break
                     continue
             
-            # 流式模式：使用实时流式生成器
+            # ✅ 流式模式：直接使用流式生成器
             if stream:
+                # 检查是否有流式生成器（在循环中已创建）
                 if 'stream_generator' not in locals():
                     error_message = last_error or "没有可用的账号"
                     status_code = 429 if isinstance(last_error, (AccountRateLimitError, NoAvailableAccount)) else 500
                     return jsonify({"error": f"所有账号请求失败: {error_message}"}), status_code
                 
                 def generate():
-                    print(f"[DEBUG] generate() started")
                     try:
-                        chunk_count = 0
+                        # 使用真正的流式生成器，实时转发
                         for chunk in stream_generator:
-                            chunk_count += 1
-                            if chunk_count <= 3:
-                                print(f"[DEBUG] generate() yielding chunk {chunk_count}: {chunk[:100] if chunk else 'None'}...")
                             yield chunk
                         
+                        # 流式生成器结束后，处理图片/视频（需要下载）
+                        # 注意：stream_chat_realtime_generator 返回 ChatResponse 对象
+                        # 但我们需要手动获取它，这里暂时跳过图片处理（图片会在生成器中处理）
+                        
+                        # 发送结束标记
                         end_chunk = {
                             "id": chat_id,
                             "object": "chat.completion.chunk",
@@ -652,6 +785,7 @@ def register_routes(app):
                         yield f"data: {json.dumps(end_chunk, ensure_ascii=False)}\n\n"
                         yield "data: [DONE]\n\n"
                     except Exception as e:
+                        # 错误处理
                         error_chunk = {
                             "id": chat_id,
                             "object": "chat.completion.chunk",
@@ -666,6 +800,118 @@ def register_routes(app):
                         }
                         yield f"data: {json.dumps(error_chunk, ensure_ascii=False)}\n\n"
                         yield "data: [DONE]\n\n"
+                
+                # 对于流式响应，在开始时就记录日志
+                response_time = int((time.time() - request_start_time) * 1000)
+                try:
+                    from .api_key_manager import log_api_call
+                    log_api_call(
+                        api_key_id=api_key_id,
+                        model=requested_model,
+                        status="success",
+                        response_time=response_time,
+                        ip_address=ip_address,
+                        endpoint=endpoint,
+                        request_size=request_size,
+                        response_size=None
+                    )
+                except Exception:
+                    pass
+                
+                return Response(generate(), mimetype='text/event-stream')
+            
+            # 非流式模式：使用原来的逻辑
+            if chat_response is None:
+                error_message = last_error or "没有可用的账号"
+                status_code = 429 if isinstance(last_error, (AccountRateLimitError, NoAvailableAccount)) else 500
+                return jsonify({"error": f"所有账号请求失败: {error_message}"}), status_code
+
+            # 被动检测方式：不再主动记录配额使用量
+            # 配额错误会通过 HTTP 错误码（401, 403, 429）被动检测，并在 raise_for_account_response 中处理
+
+            response_content = build_openai_response_content(chat_response, request.host_url, account_manager, request, data)
+
+            if False:  # 原来的流式逻辑已移到上面
+                def generate():
+                    chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+                    
+                    # 如果 response_content 是数组（包含图片），需要分别发送文本和图片
+                    if isinstance(response_content, list):
+                        # 先发送文本部分
+                        text_parts = [item for item in response_content if item.get("type") == "text"]
+                        if text_parts:
+                            text_content = " ".join(item.get("text", "") for item in text_parts)
+                            if text_content.strip():
+                                # 分块发送文本
+                                words = text_content.split(" ")
+                                for i, word in enumerate(words):
+                                    chunk = {
+                                        "id": chunk_id,
+                                        "object": "chat.completion.chunk",
+                                        "created": int(time.time()),
+                                        "model": requested_model,
+                                        "choices": [{
+                                            "index": 0,
+                                            "delta": {"content": word + (" " if i < len(words) - 1 else "")},
+                                            "finish_reason": None
+                                        }]
+                                    }
+                                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                        
+                        # 然后发送图片/视频部分
+                        # 注意：流式响应中 delta.content 必须是字符串，不能是对象
+                        # 将图片 URL 作为字符串发送，这样兼容性更好（chat_history.html 可以通过正则识别）
+                        media_parts = [item for item in response_content if item.get("type") == "image_url"]
+                        for media_item in media_parts:
+                            image_url = media_item.get("image_url", {}).get("url", "")
+                            if image_url:
+                                # 将图片 URL 作为字符串发送（换行分隔，便于 chat_history.html 识别）
+                                # 使用换行符分隔，这样 chat_history.html 的 parseContentWithMedia 函数可以通过正则识别
+                                image_url_text = f"\n{image_url}\n"
+                                image_chunk = {
+                                    "id": chunk_id,
+                                    "object": "chat.completion.chunk",
+                                    "created": int(time.time()),
+                                    "model": requested_model,
+                                    "choices": [{
+                                        "index": 0,
+                                        "delta": {"content": image_url_text},
+                                        "finish_reason": None
+                                    }]
+                                }
+                                yield f"data: {json.dumps(image_chunk, ensure_ascii=False)}\n\n"
+                    else:
+                        # 纯文本，分块发送
+                        if response_content and response_content.strip():
+                            words = response_content.split(" ")
+                            for i, word in enumerate(words):
+                                chunk = {
+                                    "id": chunk_id,
+                                    "object": "chat.completion.chunk",
+                                    "created": int(time.time()),
+                                    "model": requested_model,
+                                    "choices": [{
+                                        "index": 0,
+                                        "delta": {"content": word + (" " if i < len(words) - 1 else "")},
+                                        "finish_reason": None
+                                    }]
+                                }
+                                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                    
+                    # 发送结束标记
+                    end_chunk = {
+                        "id": chunk_id,
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": requested_model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": "stop"
+                        }]
+                    }
+                    yield f"data: {json.dumps(end_chunk, ensure_ascii=False)}\n\n"
+                    yield "data: [DONE]\n\n"
                 
                 # 对于流式响应，在开始时就记录日志（响应大小无法准确计算）
                 response_time = int((time.time() - request_start_time) * 1000)
@@ -685,54 +931,46 @@ def register_routes(app):
                     pass  # 日志记录失败不应影响主流程
 
                 return Response(generate(), mimetype='text/event-stream')
-            
-            # 非流式模式
-            if chat_response is None:
-                error_message = last_error or "没有可用的账号"
-                status_code = 429 if isinstance(last_error, (AccountRateLimitError, NoAvailableAccount)) else 500
-                return jsonify({"error": f"所有账号请求失败: {error_message}"}), status_code
-            
-            response_content = build_openai_response_content(chat_response, request.host_url, account_manager, request, data)
-            
-            # 非流式响应：response_content 可能是字符串或数组
-            response = {
-                "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": requested_model,
-                "choices": [{
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": response_content  # 可以是字符串或数组
-                    },
-                    "finish_reason": "stop"
-                }],
-                "usage": {
-                    "prompt_tokens": len(user_message),
-                    "completion_tokens": len(chat_response.text),
-                    "total_tokens": len(user_message) + len(chat_response.text)
+            else:
+                # 非流式响应：response_content 可能是字符串或数组
+                response = {
+                    "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": requested_model,
+                    "choices": [{
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": response_content  # 可以是字符串或数组
+                        },
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": len(user_message),
+                        "completion_tokens": len(chat_response.text),
+                        "total_tokens": len(user_message) + len(chat_response.text)
+                    }
                 }
-            }
-            # 记录成功日志
-            response_time = int((time.time() - request_start_time) * 1000)
-            response_size = len(json.dumps(response, ensure_ascii=False).encode())
-            try:
-                from .api_key_manager import log_api_call
-                log_api_call(
-                    api_key_id=api_key_id,
-                    model=requested_model,
-                    status="success",
-                    response_time=response_time,
-                    ip_address=ip_address,
-                    endpoint=endpoint,
-                    request_size=request_size,
-                    response_size=response_size
-                )
-            except Exception:
-                pass  # 日志记录失败不应影响主流程
-            
-            return jsonify(response)
+                # 记录成功日志
+                response_time = int((time.time() - request_start_time) * 1000)
+                response_size = len(json.dumps(response, ensure_ascii=False).encode())
+                try:
+                    from .api_key_manager import log_api_call
+                    log_api_call(
+                        api_key_id=api_key_id,
+                        model=requested_model,
+                        status="success",
+                        response_time=response_time,
+                        ip_address=ip_address,
+                        endpoint=endpoint,
+                        request_size=request_size,
+                        response_size=response_size
+                    )
+                except Exception:
+                    pass  # 日志记录失败不应影响主流程
+                
+                return jsonify(response)
 
         except Exception as e:
             # 记录失败日志
@@ -1096,14 +1334,9 @@ def register_routes(app):
                 try:
                     import sys
                     cookie_refresh_module = sys.modules.get('app.cookie_refresh')
-                    if cookie_refresh_module:
-                        # 先确保线程正在运行
-                        if hasattr(cookie_refresh_module, 'start_auto_refresh_thread'):
-                            cookie_refresh_module.start_auto_refresh_thread()
-                        # 然后触发立即刷新事件
-                        if hasattr(cookie_refresh_module, '_immediate_refresh_event'):
-                            cookie_refresh_module._immediate_refresh_event.set()
-                            print(f"[Cookie 自动刷新] ⚡ 账号 {account_id} Cookie 已清空，已触发立即刷新检查")
+                    if cookie_refresh_module and hasattr(cookie_refresh_module, '_immediate_refresh_event'):
+                        cookie_refresh_module._immediate_refresh_event.set()
+                        print(f"[Cookie 自动刷新] ⚡ 账号 {account_id} Cookie 已清空，已触发立即刷新检查")
                 except (ImportError, AttributeError):
                     pass
         
@@ -1346,14 +1579,9 @@ def register_routes(app):
                 try:
                     import sys
                     cookie_refresh_module = sys.modules.get('app.cookie_refresh')
-                    if cookie_refresh_module:
-                        # 先确保线程正在运行
-                        if hasattr(cookie_refresh_module, 'start_auto_refresh_thread'):
-                            cookie_refresh_module.start_auto_refresh_thread()
-                        # 然后触发立即刷新事件
-                        if hasattr(cookie_refresh_module, '_immediate_refresh_event'):
-                            cookie_refresh_module._immediate_refresh_event.set()
-                            print(f"[Cookie 自动刷新] ⚡ 账号 {account_id} Cookie 已清空，已触发立即刷新检查")
+                    if cookie_refresh_module and hasattr(cookie_refresh_module, '_immediate_refresh_event'):
+                        cookie_refresh_module._immediate_refresh_event.set()
+                        print(f"[Cookie 自动刷新] ⚡ 账号 {account_id} Cookie 已清空，已触发立即刷新检查")
                 except (ImportError, AttributeError):
                     pass
             
@@ -1611,8 +1839,6 @@ def register_routes(app):
         
         # 添加账号信息（用于预览）
         config["accounts"] = account_manager.accounts
-        # 移除已废弃的字段
-        config.pop("api_tokens", None)  # 已废弃，使用新的 API 密钥管理系统
         
         return jsonify(config)
     
@@ -1631,19 +1857,21 @@ def register_routes(app):
             account_manager.config["upload_endpoint"] = data["upload_endpoint"]
         if "upload_api_token" in data:
             account_manager.config["upload_api_token"] = data["upload_api_token"]
+        if "upload_folder" in data:
+            account_manager.config["upload_folder"] = data["upload_folder"] or None
+        if "auto_cleanup_enabled" in data:
+            account_manager.config["auto_cleanup_enabled"] = bool(data["auto_cleanup_enabled"])
+        if "upload_retention_days" in data:
+            try:
+                account_manager.config["upload_retention_days"] = int(data["upload_retention_days"]) or 7
+            except Exception:
+                account_manager.config["upload_retention_days"] = 7
         if "auto_refresh_cookie" in data:
             account_manager.config["auto_refresh_cookie"] = bool(data["auto_refresh_cookie"])
-            # 如果启用了自动刷新，尝试启动后台线程
-            if data["auto_refresh_cookie"]:
-                try:
-                    from .cookie_refresh import start_auto_refresh_thread
-                    start_auto_refresh_thread()
-                except Exception as e:
-                    print(f"[!] 启动自动刷新线程失败: {e}")
         if "tempmail_worker_url" in data:
             account_manager.config["tempmail_worker_url"] = data["tempmail_worker_url"] or None
-        if "image_output_mode" in data:
-            account_manager.config["image_output_mode"] = data["image_output_mode"]
+        if "chat_stream_enabled" in data:
+            account_manager.config["chat_stream_enabled"] = bool(data["chat_stream_enabled"]) 
         if "log_level" in data:
             try:
                 set_log_level(data["log_level"], persist=True)
@@ -1827,15 +2055,15 @@ def register_routes(app):
             data = request.json
             if not data:
                 return jsonify({"error": "请求数据为空"}), 400
-            
+
             # 检查账号数据
             accounts = data.get("accounts", [])
             if not isinstance(accounts, list):
                 return jsonify({"error": "账号数据格式错误，必须是数组"}), 400
-            
+
             from .logger import print
             print(f"[配置导入] 导入 {len(accounts)} 个账号", _level="INFO")
-            
+
             account_manager.config = data
             if data.get("log_level"):
                 try:
@@ -1844,19 +2072,17 @@ def register_routes(app):
                     pass
             if data.get("admin_secret_key"):
                 account_manager.config["admin_secret_key"] = data.get("admin_secret_key")
-                # 重新加载以更新全局变量
                 get_admin_secret_key()
             else:
                 get_admin_secret_key()
             account_manager.accounts = accounts
             account_manager.account_states = {}
-            
+
             # 重新初始化账号状态（包括配额信息）
             for i, acc in enumerate(account_manager.accounts):
                 available = acc.get("available", True)
-                # 被动检测模式：不再使用配额使用量字段
-                quota_usage = {}  # 保留用于向后兼容
-                quota_reset_date = None  # 保留用于向后兼容
+                quota_usage = {}
+                quota_reset_date = None
                 account_manager.account_states[i] = {
                     "jwt": None,
                     "jwt_time": 0,
@@ -1867,28 +2093,43 @@ def register_routes(app):
                     "quota_usage": quota_usage,
                     "quota_reset_date": quota_reset_date
                 }
-            
-            account_manager.save_config()
-            print(f"[配置导入] 配置导入成功，已保存 {len(account_manager.accounts)} 个账号", _level="INFO")
-            
-            # 导入API密钥
-            api_keys = data.get("api_keys", [])
+
+            # 兼容导入 API 密钥
             imported_keys = 0
-            if api_keys:
+            try:
                 from .api_key_manager import import_api_key
-                for key_data in api_keys:
-                    if key_data.get("key"):
-                        result = import_api_key(
-                            api_key=key_data["key"],
-                            name=key_data.get("name", "导入的密钥"),
-                            expires_at=key_data.get("expires_at"),
-                            description=key_data.get("description")
-                        )
-                        if result:
-                            imported_keys += 1
-                print(f"[配置导入] 导入 {imported_keys} 个API密钥", _level="INFO")
-            
-            return jsonify({"success": True, "accounts_count": len(account_manager.accounts), "api_keys_count": imported_keys})
+                api_keys = data.get("api_keys") or []
+                if isinstance(api_keys, list):
+                    for item in api_keys:
+                        if isinstance(item, dict):
+                            raw = item.get("key")
+                            name = item.get("name") or "Imported Key"
+                            expires_at = item.get("expires_at")
+                            description = item.get("description")
+                            if raw:
+                                if import_api_key(raw, name, expires_at, description):
+                                    imported_keys += 1
+                api_tokens = data.get("api_tokens") or []
+                if isinstance(api_tokens, list):
+                    for idx, item in enumerate(api_tokens, start=1):
+                        if isinstance(item, str):
+                            if import_api_key(item, f"Imported Key #{idx}"):
+                                imported_keys += 1
+                        elif isinstance(item, dict):
+                            raw = item.get("key") or item.get("token")
+                            name = item.get("name") or f"Imported Key #{idx}"
+                            expires_at = item.get("expires_at")
+                            description = item.get("description")
+                            if raw:
+                                if import_api_key(raw, name, expires_at, description):
+                                    imported_keys += 1
+            except Exception as e:
+                from .logger import print
+                print(f"[配置导入] API 密钥导入步骤失败: {e}", _level="ERROR")
+
+            account_manager.save_config()
+            print(f"[配置导入] 配置导入成功，已保存 {len(account_manager.accounts)} 个账号，导入 API 密钥 {imported_keys} 个", _level="INFO")
+            return jsonify({"success": True, "accounts_count": len(account_manager.accounts), "imported_api_keys": imported_keys})
         except Exception as e:
             from .logger import print
             print(f"[配置导入] 导入失败: {e}", _level="ERROR")
@@ -1934,15 +2175,8 @@ def register_routes(app):
     @app.route('/api/config/export', methods=['GET'])
     @require_admin
     def export_config():
-        """导出配置（包含账号信息和API密钥）"""
+        """导出配置（包含账号信息）"""
         config = dict(account_manager.config) if account_manager.config else {}
         # 添加账号信息
         config["accounts"] = account_manager.accounts
-        # 移除已废弃的字段
-        config.pop("api_tokens", None)  # 已废弃，使用新的 API 密钥管理系统
-        # 添加API密钥
-        from .api_key_manager import list_api_keys
-        api_keys = list_api_keys(include_inactive=False)
-        config["api_keys"] = api_keys
         return jsonify(config)
-

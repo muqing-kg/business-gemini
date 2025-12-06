@@ -92,7 +92,8 @@ def upload_base64_to_cfbed(
     mime_type: str,
     endpoint: str,
     api_token: str,
-    proxy: Optional[str] = None
+    proxy: Optional[str] = None,
+    upload_folder: Optional[str] = None
 ) -> Dict[str, str]:
     """从 base64 数据上传文件到 cfbed
     
@@ -119,6 +120,7 @@ def upload_base64_to_cfbed(
         mime_type=mime_type,
         endpoint=endpoint,
         api_token=api_token,
+        upload_folder=upload_folder,
         proxy=proxy
     )
 
@@ -129,7 +131,8 @@ def upload_file_streaming_to_cfbed(
     mime_type: str,
     endpoint: str,
     api_token: str,
-    proxy: Optional[str] = None
+    proxy: Optional[str] = None,
+    upload_folder: Optional[str] = None
 ) -> Dict[str, str]:
     """流式上传文件到 cfbed（适合大文件）
     
@@ -161,6 +164,7 @@ def upload_file_streaming_to_cfbed(
         mime_type=mime_type,
         endpoint=endpoint,
         api_token=api_token,
+        upload_folder=upload_folder,
         proxy=proxy
     )
 

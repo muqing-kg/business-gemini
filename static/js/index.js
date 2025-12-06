@@ -1046,7 +1046,26 @@
                 document.getElementById('uploadEndpoint').value = configData.upload_endpoint || '';
                 document.getElementById('uploadApiToken').value = configData.upload_api_token || '';
                 document.getElementById('imageBaseUrl').value = configData.image_base_url || '';
-                document.getElementById('imageOutputMode').value = configData.image_output_mode || '';
+                const uploadFolderEl = document.getElementById('uploadFolder');
+                if (uploadFolderEl) {
+                    uploadFolderEl.value = configData.upload_folder || '';
+                }
+                const autoCleanupEl = document.getElementById('autoCleanupEnabled');
+                if (autoCleanupEl) {
+                    autoCleanupEl.checked = !!configData.auto_cleanup_enabled;
+                }
+                const retentionEl = document.getElementById('uploadRetentionDays');
+                if (retentionEl) {
+                    retentionEl.value = (configData.upload_retention_days || 7).toString();
+                }
+                const iomEl = document.getElementById('imageOutputMode');
+                if (iomEl) {
+                    iomEl.value = configData.image_output_mode || '';
+                }
+                const streamEl = document.getElementById('chatStreamEnabled');
+                if (streamEl) {
+                    streamEl.checked = (configData.chat_stream_enabled !== false);
+                }
                 document.getElementById('tempmailWorkerUrl').value = configData.tempmail_worker_url || '';
                 document.getElementById('autoRefreshCookie').checked = configData.auto_refresh_cookie || false;
                 document.getElementById('configJson').value = JSON.stringify(configData, null, 2);
@@ -1495,6 +1514,9 @@
             const uploadEndpoint = document.getElementById('uploadEndpoint').value;
             const uploadApiToken = document.getElementById('uploadApiToken').value;
             const imageBaseUrl = document.getElementById('imageBaseUrl').value;
+            const uploadFolder = document.getElementById('uploadFolder').value;
+            const autoCleanupEnabled = document.getElementById('autoCleanupEnabled').checked;
+            const uploadRetentionDays = parseInt(document.getElementById('uploadRetentionDays').value, 10);
             const tempmailWorkerUrl = document.getElementById('tempmailWorkerUrl').value;
             try {
                 const res = await apiFetch(`${API_BASE}/api/config`, {
@@ -1506,7 +1528,11 @@
                         upload_endpoint: uploadEndpoint,
                         upload_api_token: uploadApiToken,
                         image_base_url: imageBaseUrl,
-                        image_output_mode: document.getElementById('imageOutputMode').value,
+                        upload_folder: uploadFolder,
+                        auto_cleanup_enabled: autoCleanupEnabled,
+                        upload_retention_days: uploadRetentionDays,
+                        // image_output_mode 移除，改为后端自动检测
+                        chat_stream_enabled: document.getElementById('chatStreamEnabled').checked,
                         tempmail_worker_url: tempmailWorkerUrl
                     })
                 });

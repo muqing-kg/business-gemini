@@ -12,7 +12,7 @@ _original_print = builtins.print
 
 # 日志文件夹和文件配置
 # 优先使用环境变量中的日志目录配置，否则使用默认路径
-LOG_DIR = Path(os.environ.get('LOG_DIR', Path(__file__).parent.parent / "log"))
+LOG_DIR = Path(os.environ.get('LOG_DIR', Path(__file__).parent.parent / "data" / "log"))
 LOG_DIR.mkdir(exist_ok=True, parents=True)
 LOG_FILE = LOG_DIR / "app.log"
 ERROR_LOG_FILE = LOG_DIR / "error.log"

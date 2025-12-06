@@ -42,6 +42,7 @@ from app.utils import check_proxy
 
 # 导入 WebSocket 管理器
 from app.websocket_manager import connection_manager, emit_system_log
+from app.cleanup import start_auto_cleanup_thread
 
 # 初始化 Flask 应用并注册路由
 app, socketio = init_app()
@@ -193,13 +194,19 @@ if __name__ == '__main__':
             os.environ['FORCE_HEADED'] = '1'
             os.environ.pop('FORCE_HEADLESS', None)  # 清除 headless 标志
             print("[✓] 已启用强制有头模式（--headed）")
-        # 启动临时邮箱自动刷新线程（每1小时检查过期 Cookie 并使用临时邮箱刷新）
+        # 启动临时邮箱自动刷新线程（每2小时检查过期 Cookie 并使用临时邮箱刷新）
         from app.cookie_refresh import start_auto_refresh_thread
         if start_auto_refresh_thread():
             print("[✓] Cookie 自动刷新功能已启用（每2小时检查一次过期 Cookie，使用临时邮箱自动刷新）")
     elif auto_refresh_enabled and not PLAYWRIGHT_AVAILABLE:
         print("[!] 警告: 配置启用了自动刷新 Cookie，但 Playwright 未安装")
         print("    安装命令: pip install playwright && playwright install chromium")
+    if account_manager.config.get("auto_cleanup_enabled"):
+        try:
+            if start_auto_cleanup_thread(account_manager):
+                print("[✓] 自动清理上传文件已启用")
+        except Exception:
+            print("[!] 自动清理上传文件启动失败")
     
     # 确定端口和主机地址
     port = args.port

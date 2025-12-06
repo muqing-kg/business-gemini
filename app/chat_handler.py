@@ -6,7 +6,8 @@ import json
 import base64
 import uuid
 import requests
-from typing import List, Optional, Dict, Any
+from datetime import datetime
+from typing import List, Optional, Dict, Any, Generator
 
 from app.models import ChatResponse, ChatImage
 from app.config import STREAM_ASSIST_URL, IMAGE_CACHE_DIR, VIDEO_CACHE_DIR
@@ -29,78 +30,39 @@ from .logger import print
 # 为了避免循环引用，这里先不导入，通过参数传递
 
 
+# ---------- JSON 流式解析器 (参考 j.py) ----------
 class JSONStreamParser:
-    """处理分块 JSON 流的解析器"""
+    """
+    处理 Google 返回的非标准/分块 JSON 流。
+    能够处理被截断的 JSON 对象，实现真正的流式解析。
+    """
     def __init__(self):
         self.buffer = ""
-        
-    def feed(self, chunk: str):
-        """添加新的数据块并尝试解析完整的 JSON 对象"""
+        self.decoder = json.JSONDecoder()
+
+    def decode(self, chunk: str) -> List[dict]:
+        """解析分块 JSON 数据，返回完整的 JSON 对象列表"""
         self.buffer += chunk
         results = []
-        
         while True:
+            self.buffer = self.buffer.lstrip()  # 去除头部空白
+            # 尝试跳过数组开始的 [ 或分隔符 ,
+            if self.buffer.startswith("[") or self.buffer.startswith(","):
+                self.buffer = self.buffer[1:]
+                continue
+            
+            if not self.buffer:
+                break
+
             try:
-                obj, end_idx = self._try_parse()
-                if obj is not None:
-                    results.append(obj)
-                    self.buffer = self.buffer[end_idx:].lstrip()
-                else:
-                    break
-            except Exception:
+                # 尝试解析一个完整的 JSON 对象
+                obj, idx = self.decoder.raw_decode(self.buffer)
+                results.append(obj)
+                self.buffer = self.buffer[idx:]
+            except json.JSONDecodeError:
+                # 缓冲区数据不完整，等待下一个 chunk
                 break
-        
         return results
-    
-    def _try_parse(self):
-        """尝试从缓冲区解析一个 JSON 对象"""
-        if not self.buffer.strip():
-            return None, 0
-            
-        start = -1
-        for i, c in enumerate(self.buffer):
-            if c in '{[':
-                start = i
-                break
-        
-        if start == -1:
-            return None, 0
-        
-        bracket_count = 0
-        in_string = False
-        escape_next = False
-        
-        for i in range(start, len(self.buffer)):
-            c = self.buffer[i]
-            
-            if escape_next:
-                escape_next = False
-                continue
-                
-            if c == '\\':
-                escape_next = True
-                continue
-                
-            if c == '"' and not escape_next:
-                in_string = not in_string
-                continue
-                
-            if in_string:
-                continue
-                
-            if c in '{[':
-                bracket_count += 1
-            elif c in '}]':
-                bracket_count -= 1
-                
-                if bracket_count == 0:
-                    try:
-                        obj = json.loads(self.buffer[start:i+1])
-                        return obj, i + 1
-                    except json.JSONDecodeError:
-                        return None, 0
-        
-        return None, 0
 
 
 def get_tools_spec_for_model(model_id: Optional[str]) -> Dict[str, Any]:
@@ -138,9 +100,11 @@ def stream_chat_realtime_generator(jwt: str, sess_name: str, message: str,
                                    model_id: Optional[str] = None, account_manager=None, 
                                    account_idx: Optional[int] = None, quota_type: Optional[str] = None,
                                    chat_id: str = None, created: int = None, model_name: str = None,
-                                   host_url: str = None):
-    print(f"[DEBUG] stream_chat_realtime_generator called: message={message[:50] if message else 'None'}...")
-    """实时流式生成器：边接收边解析边转发
+                                   host_url: str = None) -> Generator[str, None, None]:
+    """真正的流式处理：边接收边解析边转发
+    
+    这是一个生成器函数，实时解析 Gemini API 的流式响应并立即转发给客户端。
+    同时收集图片/视频信息（因为需要下载，不能实时转发）。
     
     Args:
         jwt: JWT token
@@ -153,17 +117,20 @@ def stream_chat_realtime_generator(jwt: str, sess_name: str, message: str,
         account_manager: AccountManager实例
         account_idx: 账号索引
         quota_type: 配额类型
-        chat_id: 聊天ID（用于OpenAI格式）
+        chat_id: OpenAI 格式的聊天ID
         created: 创建时间戳
-        model_name: 模型名称（用于OpenAI格式）
-        host_url: 主机URL（用于构建图片URL）
+        model_name: 模型名称
     
     Yields:
-        SSE格式的数据块
+        str: OpenAI 格式的 SSE 数据块（"data: {...}\n\n"）
+    
+    Returns:
+        ChatResponse: 包含图片/视频等媒体信息的响应对象
     """
     query_parts = [{"text": message}]
     request_file_ids = file_ids if file_ids else []
     
+    # 根据模型ID获取工具配置
     tools_spec = get_tools_spec_for_model(model_id)
     
     body = {
@@ -182,206 +149,286 @@ def stream_chat_realtime_generator(jwt: str, sess_name: str, message: str,
         }
     }
     
+    # 如果指定了模型ID，在 streamAssistRequest 中添加 assistGenerationConfig
     if model_id and model_id not in ["gemini-video", "gemini-image"]:
         body["streamAssistRequest"]["assistGenerationConfig"] = {
             "modelId": model_id
         }
     
-    headers = {
-        "Authorization": f"Bearer {jwt}",
-        "Content-Type": "application/json"
-    }
-    
     proxies = {"http": proxy, "https": proxy} if proxy else None
     
-    url = "https://alkalimakersuite-pa.clients6.google.com/v1/makers/assistants:streamAssist"
+    # 初始化响应对象（用于收集图片/视频）
+    result = ChatResponse()
+    file_ids_list = []
+    current_session = None
+    parser = JSONStreamParser()
     
-    try:
-        response = requests.post(
-            url,
-            headers=headers,
-            json=body,
-            proxies=proxies,
-            stream=True,
-            timeout=300
-        )
-        
-        from .account_manager import raise_for_account_response
-        raise_for_account_response(response, account_manager, account_idx, quota_type)
-        
-        parser = JSONStreamParser()
-        collected_file_ids = set()
-        
-        for chunk in response.iter_content(chunk_size=1024, decode_unicode=True):
-            if not chunk:
-                continue
-            
-            if isinstance(chunk, bytes):
-                chunk = chunk.decode('utf-8', errors='ignore')
-            
-            json_objects = parser.feed(chunk)
-            
-            for obj in json_objects:
-                # 处理 generatedImages
-                if "generatedImages" in obj:
-                    for img_data in obj.get("generatedImages", []):
-                        media_result = parse_generated_media(img_data, account_manager, host_url)
-                        if media_result and media_result.get("url"):
-                            media_url = media_result["url"]
-                            img_chunk = {
-                                "id": chat_id,
-                                "object": "chat.completion.chunk",
-                                "created": created,
-                                "model": model_name,
-                                "choices": [{
-                                    "index": 0,
-                                    "delta": {"content": media_url},
-                                    "finish_reason": None
-                                }]
-                            }
-                            yield f"data: {json.dumps(img_chunk, ensure_ascii=False)}\n\n"
-                
-                # 处理文本回复
-                if "reply" in obj:
-                    reply = obj["reply"]
-                    if "assistReply" in reply:
-                        assist_reply = reply["assistReply"]
-                        if "content" in assist_reply:
-                            content = assist_reply["content"]
-                            if "parts" in content:
-                                for part in content["parts"]:
-                                    # 收集文件ID
-                                    if "fileId" in part:
-                                        collected_file_ids.add(part["fileId"])
-                                    
-                                    # 实时转发文本（过滤思考输出）
-                                    if "text" in part:
-                                        thought = part.get("thought", False)
-                                        import logging
-                                        logging.info(f"[流式输出] thought={thought}, text长度={len(part.get('text', ''))}")
-                                        if not thought:
-                                            text = part["text"]
-                                            text_chunk = {
-                                                "id": chat_id,
-                                                "object": "chat.completion.chunk",
-                                                "created": created,
-                                                "model": model_name,
-                                                "choices": [{
-                                                    "index": 0,
-                                                    "delta": {"content": text},
-                                                    "finish_reason": None
-                                                }]
-                                            }
-                                            yield f"data: {json.dumps(text_chunk, ensure_ascii=False)}\n\n"
-        
-        # 处理收集到的文件ID（图片/视频）
-        if collected_file_ids and host_url:
-            for file_id in collected_file_ids:
-                try:
-                    file_url = f"https://alkalimakersuite-pa.clients6.google.com/v1/files/{file_id}:download"
-                    file_response = requests.get(
-                        file_url,
-                        headers={"Authorization": f"Bearer {jwt}"},
-                        proxies=proxies,
-                        timeout=60
-                    )
-                    
-                    if file_response.status_code == 200:
-                        content_type = file_response.headers.get('Content-Type', '')
-                        file_data = file_response.content
-                        
-                        cfbed_url = get_cfbed_url()
-                        cfbed_api_key = get_cfbed_api_key()
-                        
-                        if cfbed_url and cfbed_api_key:
-                            b64_data = base64.b64encode(file_data).decode('utf-8')
-                            
-                            if 'video' in content_type:
-                                upload_response = requests.post(
-                                    f"{cfbed_url}/upload/video",
-                                    headers={"X-API-Key": cfbed_api_key, "Content-Type": "application/json"},
-                                    json={"video": b64_data},
-                                    timeout=120
-                                )
-                                if upload_response.status_code == 200:
-                                    result = upload_response.json()
-                                    if result.get("success") and result.get("url"):
-                                        media_url = result["url"]
-                                        media_chunk = {
-                                            "id": chat_id,
-                                            "object": "chat.completion.chunk",
-                                            "created": created,
-                                            "model": model_name,
-                                            "choices": [{
-                                                "index": 0,
-                                                "delta": {"content": media_url},
-                                                "finish_reason": None
-                                            }]
-                                        }
-                                        yield f"data: {json.dumps(media_chunk, ensure_ascii=False)}\n\n"
-                            else:
-                                upload_response = requests.post(
-                                    f"{cfbed_url}/upload",
-                                    headers={"X-API-Key": cfbed_api_key, "Content-Type": "application/json"},
-                                    json={"image": b64_data},
-                                    timeout=60
-                                )
-                                if upload_response.status_code == 200:
-                                    result = upload_response.json()
-                                    if result.get("success") and result.get("url"):
-                                        media_url = result["url"]
-                                        media_chunk = {
-                                            "id": chat_id,
-                                            "object": "chat.completion.chunk",
-                                            "created": created,
-                                            "model": model_name,
-                                            "choices": [{
-                                                "index": 0,
-                                                "delta": {"content": media_url},
-                                                "finish_reason": None
-                                            }]
-                                        }
-                                        yield f"data: {json.dumps(media_chunk, ensure_ascii=False)}\n\n"
-                        else:
-                            # 本地缓存
-                            cache_id = str(uuid.uuid4())
-                            if 'video' in content_type:
-                                VIDEO_CACHE[cache_id] = file_data
-                                media_url = f"{host_url}api/video/{cache_id}"
-                            else:
-                                IMAGE_CACHE[cache_id] = file_data
-                                media_url = f"{host_url}api/image/{cache_id}"
-                            
-                            media_chunk = {
-                                "id": chat_id,
-                                "object": "chat.completion.chunk",
-                                "created": created,
-                                "model": model_name,
-                                "choices": [{
-                                    "index": 0,
-                                    "delta": {"content": media_url},
-                                    "finish_reason": None
-                                }]
-                            }
-                            yield f"data: {json.dumps(media_chunk, ensure_ascii=False)}\n\n"
-                except Exception as e:
-                    import logging
-                    logging.warning(f"处理文件ID {file_id} 时出错: {e}")
-                    
-    except Exception as e:
-        error_chunk = {
+    # 先发送 role 标记（降低首字延迟）
+    if chat_id and created is not None and model_name:
+        role_chunk = {
             "id": chat_id,
             "object": "chat.completion.chunk",
             "created": created,
             "model": model_name,
-            "choices": [{
-                "index": 0,
-                "delta": {},
-                "finish_reason": "stop"
-            }],
-            "error": {"message": str(e)}
+            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]
         }
-        yield f"data: {json.dumps(error_chunk, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps(role_chunk, ensure_ascii=False)}\n\n"
+    
+    try:
+        resp = requests.post(
+            STREAM_ASSIST_URL,
+            headers=get_headers(jwt),
+            json=body,
+            proxies=proxies,
+            verify=False,
+            timeout=300,
+            stream=True
+        )
+    except requests.RequestException as e:
+        raise AccountRequestError(f"聊天请求失败: {e}") from e
+    
+    if resp.status_code != 200:
+        raise_for_account_response(resp, "聊天请求", account_idx, quota_type)
+    
+    # ✅ 真正的流式处理：逐块读取并实时解析
+    buffer = ""
+    for line in resp.iter_lines():
+        if not line:
+            continue
+        
+        chunk_text = line.decode('utf-8')
+        buffer += chunk_text + "\n"
+        
+        # 使用 JSONStreamParser 解析分块 JSON
+        json_objects = parser.decode(chunk_text)
+        
+        for data in json_objects:
+            sar = data.get("streamAssistResponse")
+            if not sar:
+                continue
+            
+            # 获取session信息
+            session_info = sar.get("sessionInfo", {})
+            if session_info.get("session"):
+                current_session = session_info["session"]
+            
+            # 检查顶层的generatedImages（图片需要下载，不能实时转发）
+            for gen_img in sar.get("generatedImages", []):
+                parse_generated_media(gen_img, result, proxy, account_manager)
+            
+            answer = sar.get("answer") or {}
+            
+            # 检查answer级别的generatedImages
+            for gen_img in answer.get("generatedImages", []):
+                parse_generated_media(gen_img, result, proxy, account_manager)
+            
+            # ✅ 实时处理文本回复（过滤思考输出）
+            for reply in answer.get("replies", []):
+                # 检查reply级别的generatedImages
+                for gen_img in reply.get("generatedImages", []):
+                    parse_generated_media(gen_img, result, proxy, account_manager)
+                
+                gc = reply.get("groundedContent", {})
+                content = gc.get("content", {})
+                text = content.get("text", "")
+                # ✅ 过滤思考输出
+                thought = content.get("thought", False)
+                
+                # 检查file字段（图片生成的关键）
+                file_info = content.get("file")
+                if file_info and file_info.get("fileId"):
+                    file_ids_list.append({
+                        "fileId": file_info["fileId"],
+                        "mimeType": file_info.get("mimeType", "image/png"),
+                        "fileName": file_info.get("name")
+                    })
+                
+                # 解析图片数据（需要下载，不能实时转发）
+                parse_image_from_content(content, result, proxy, account_manager)
+                parse_image_from_content(gc, result, proxy, account_manager)
+                
+                # 检查attachments
+                for att in reply.get("attachments", []) + gc.get("attachments", []) + content.get("attachments", []):
+                    parse_attachment(att, result, proxy, account_manager)
+                
+                # ✅ 只处理非思考输出，实时转发文本
+                if text and not thought:
+                    # 过滤掉 "Image generated by Nano Banana Pro." 文本
+                    filtered_text = text
+                    if "Image generated by Nano Banana Pro" in text:
+                        lines = text.split('\n')
+                        filtered_lines = [line for line in lines if "Image generated by Nano Banana Pro" not in line.strip()]
+                        filtered_text = '\n'.join(filtered_lines).strip()
+                    
+                    if filtered_text and chat_id and created is not None and model_name:
+                        # 实时转发文本内容
+                        text_chunk = {
+                            "id": chat_id,
+                            "object": "chat.completion.chunk",
+                            "created": created,
+                            "model": model_name,
+                            "choices": [{"index": 0, "delta": {"content": filtered_text}, "finish_reason": None}]
+                        }
+                        yield f"data: {json.dumps(text_chunk, ensure_ascii=False)}\n\n"
+    
+    # 处理通过fileId引用的图片/视频（需要下载，在流式结束后处理）
+    if file_ids_list and current_session:
+        try:
+            upload_endpoint = account_manager.config.get("upload_endpoint", "").strip() if account_manager else ""
+            upload_api_token = account_manager.config.get("upload_api_token", "").strip() if account_manager else ""
+            use_cfbed = bool(upload_endpoint and upload_api_token)
+            
+            file_metadata = get_session_file_metadata(jwt, current_session, team_id, proxy)
+            for finfo in file_ids_list:
+                fid = finfo["fileId"]
+                mime = finfo["mimeType"]
+                fname = finfo.get("fileName")
+                meta = file_metadata.get(fid)
+                
+                if meta:
+                    fname = fname or meta.get("name")
+                    mime = meta.get("mimeType", mime)
+                    session_path = meta.get("session") or current_session
+                else:
+                    session_path = current_session
+                
+                try:
+                    is_video = mime.startswith("video/")
+                    
+                    if use_cfbed:
+                        url = build_download_url(session_path, fid)
+                        download_resp = requests.get(
+                            url,
+                            headers=get_headers(jwt),
+                            proxies={"http": proxy, "https": proxy} if proxy else None,
+                            verify=False,
+                            timeout=600,
+                            stream=True,
+                            allow_redirects=True
+                        )
+                        download_resp.raise_for_status()
+                        
+                        upload_result = upload_file_streaming_to_cfbed(
+                            file_stream=download_resp,
+                            filename=fname or (f"media_{uuid.uuid4().hex[:8]}{get_extension_for_mime(mime)}"),
+                            mime_type=mime,
+                            endpoint=upload_endpoint,
+                            api_token=upload_api_token,
+                            proxy=proxy,
+                            upload_folder=account_manager.config.get("upload_folder") if account_manager else None
+                        )
+                        
+                        image_base_url = account_manager.config.get("image_base_url", "").strip() if account_manager else ""
+                        if not image_base_url:
+                            image_base_url = upload_endpoint.rstrip("/").replace("/upload", "")
+                        
+                        if not image_base_url.endswith("/"):
+                            image_base_url += "/"
+                        
+                        full_url = f"{image_base_url.rstrip('/')}{upload_result['src']}"
+                        
+                        img = ChatImage(
+                            file_id=fid,
+                            file_name=upload_result["src"].split("/")[-1],
+                            mime_type=mime,
+                            url=full_url,
+                            media_type="video" if is_video else "image"
+                        )
+                        result.images.append(img)
+                        try:
+                            if account_manager:
+                                items = account_manager.config.get("cfbed_uploaded_files") or []
+                                items.append({"src": upload_result["src"], "url": full_url, "mime_type": mime, "created_at": datetime.utcnow().isoformat()})
+                                account_manager.config["cfbed_uploaded_files"] = items
+                                account_manager.save_config()
+                        except Exception:
+                            pass
+                        
+                        # ✅ 实时发送图片 URL（作为字符串，兼容流式 API）
+                        if chat_id and created is not None and model_name:
+                            image_url_text = f"\n{full_url}\n"
+                            image_chunk = {
+                                "id": chat_id,
+                                "object": "chat.completion.chunk",
+                                "created": created,
+                                "model": model_name,
+                                "choices": [{
+                                    "index": 0,
+                                    "delta": {"content": image_url_text},
+                                    "finish_reason": None
+                                }]
+                            }
+                            yield f"data: {json.dumps(image_chunk, ensure_ascii=False)}\n\n"
+                    else:
+                        # 使用本地缓存
+                        if is_video:
+                            filename = download_file_streaming(jwt, session_path, fid, mime, fname, proxy, account_manager)
+                            if filename:
+                                video = ChatImage(
+                                    file_id=fid,
+                                    file_name=filename,
+                                    mime_type=mime,
+                                    media_type="video"
+                                )
+                                result.images.append(video)
+                                
+                                # ✅ 实时发送视频 URL
+                                if chat_id and created is not None and model_name:
+                                    # 构建视频 URL
+                                    base_url = get_image_base_url(host_url, account_manager, None)
+                                    video_url = f"{base_url}video/{filename}"
+                                    video_url_text = f"\n{video_url}\n"
+                                    video_chunk = {
+                                        "id": chat_id,
+                                        "object": "chat.completion.chunk",
+                                        "created": created,
+                                        "model": model_name,
+                                        "choices": [{
+                                            "index": 0,
+                                            "delta": {"content": video_url_text},
+                                            "finish_reason": None
+                                        }]
+                                    }
+                                    yield f"data: {json.dumps(video_chunk, ensure_ascii=False)}\n\n"
+                        else:
+                            file_data = download_file_with_jwt(jwt, session_path, fid, proxy)
+                            if file_data:
+                                filename = save_image_to_cache(file_data, mime, fname)
+                                if filename:
+                                    img = ChatImage(
+                                        file_id=fid,
+                                        file_name=filename,
+                                        mime_type=mime,
+                                        media_type="image"
+                                    )
+                                    result.images.append(img)
+                                    
+                                    # ✅ 实时发送图片 URL
+                                    if chat_id and created is not None and model_name:
+                                        # 构建图片 URL
+                                        base_url = get_image_base_url(host_url, account_manager, None)
+                                        image_url = f"{base_url}image/{filename}"
+                                        image_url_text = f"\n{image_url}\n"
+                                        image_chunk = {
+                                            "id": chat_id,
+                                            "object": "chat.completion.chunk",
+                                            "created": created,
+                                            "model": model_name,
+                                            "choices": [{
+                                                "index": 0,
+                                                "delta": {"content": image_url_text},
+                                                "finish_reason": None
+                                            }]
+                                        }
+                                        yield f"data: {json.dumps(image_chunk, ensure_ascii=False)}\n\n"
+                except Exception as e:
+                    print(f"[WARNING] 下载文件失败 {fid}: {e}")
+        except Exception as e:
+            print(f"[WARNING] 处理文件列表失败: {e}")
+    
+    # 流式模式下文本已实时转发，不需要返回 ChatResponse
+    # 图片/视频 URL 也已实时发送
+    pass
 
 
 def stream_chat_with_images(jwt: str, sess_name: str, message: str, 
@@ -492,6 +539,10 @@ def stream_chat_with_images(jwt: str, sess_name: str, message: str,
             print(f"[ERROR][stream_chat_with_images] Model ID: {model_id}")
         raise_for_account_response(resp, "聊天请求", account_idx, quota_type)
 
+    # ⚠️ 注意：当前实现不是真正的流式
+    # 这里是先收集完整响应，然后才解析，最后在 routes.py 中再分块发送
+    # 要实现真正的流式（边接收边解析边转发），需要参考 j.py 的实现方式
+    # 使用 JSONStreamParser 实时解析分块 JSON，并立即转发给客户端
     # 收集完整响应
     full_response = ""
     for line in resp.iter_lines():
@@ -534,6 +585,7 @@ def stream_chat_with_images(jwt: str, sess_name: str, message: str,
                 gc = reply.get("groundedContent", {})
                 content = gc.get("content", {})
                 text = content.get("text", "")
+                # ✅ 思考输出过滤：thought 字段为 True 时表示这是思考过程，应该被过滤
                 thought = content.get("thought", False)
                 
                 # 检查file字段（图片生成的关键）
@@ -553,6 +605,7 @@ def stream_chat_with_images(jwt: str, sess_name: str, message: str,
                 for att in reply.get("attachments", []) + gc.get("attachments", []) + content.get("attachments", []):
                     parse_attachment(att, result, proxy, account_manager)
                 
+                # ✅ 只处理非思考输出：text 存在且 thought 为 False
                 if text and not thought:
                     # 过滤掉 "Image generated by Nano Banana Pro." 文本
                     filtered_text = text
@@ -608,18 +661,15 @@ def stream_chat_with_images(jwt: str, sess_name: str, message: str,
                             )
                             download_resp.raise_for_status()
                             
-                            # 读取文件数据
-                            file_data = download_resp.content
-                            b64_data = base64.b64encode(file_data).decode('utf-8')
-                            
                             # 上传到 cfbed
-                            upload_result = upload_base64_to_cfbed(
-                                base64_data=b64_data,
+                            upload_result = upload_file_streaming_to_cfbed(
+                                file_stream=download_resp,
                                 filename=fname or (f"media_{uuid.uuid4().hex[:8]}{get_extension_for_mime(mime)}"),
                                 mime_type=mime,
                                 endpoint=upload_endpoint,
                                 api_token=upload_api_token,
-                                proxy=proxy
+                                proxy=proxy,
+                                upload_folder=account_manager.config.get("upload_folder") if account_manager else None
                             )
                             
                             # 构建完整 URL
@@ -636,7 +686,6 @@ def stream_chat_with_images(jwt: str, sess_name: str, message: str,
                             
                             img = ChatImage(
                                 file_id=fid,
-                                base64_data=b64_data,  # 添加 base64 数据
                                 file_name=upload_result["src"].split("/")[-1],  # 只保留文件名
                                 mime_type=mime,
                                 url=full_url,  # 公网 URL
@@ -650,18 +699,13 @@ def stream_chat_with_images(jwt: str, sess_name: str, message: str,
                                 filename = download_file_streaming(jwt, session_path, fid, mime, fname, proxy)
                                 local_path = VIDEO_CACHE_DIR / filename
                                 media_type = "video"
-                                # 读取视频文件转 base64
-                                with open(local_path, 'rb') as f:
-                                    b64_data = base64.b64encode(f.read()).decode('utf-8')
                             else:
                                 image_data = download_file_with_jwt(jwt, session_path, fid, proxy)
                                 filename = save_image_to_cache(image_data, mime, fname)
                                 local_path = IMAGE_CACHE_DIR / filename
                                 media_type = "image"
-                                b64_data = base64.b64encode(image_data).decode('utf-8')
                             img = ChatImage(
                                 file_id=fid,
-                                base64_data=b64_data,  # 添加 base64 数据
                                 file_name=filename,
                                 mime_type=mime,
                                 local_path=str(local_path),
@@ -715,7 +759,8 @@ def parse_generated_media(gen_img: Dict, result: ChatResponse, proxy: Optional[s
                     mime_type=mime_type,
                     endpoint=upload_endpoint,
                     api_token=upload_api_token,
-                    proxy=proxy
+                    proxy=proxy,
+                    upload_folder=account_manager.config.get("upload_folder") if account_manager else None
                 )
                 
                 # 构建完整 URL
@@ -789,7 +834,8 @@ def parse_image_from_content(content: Dict, result: ChatResponse, proxy: Optiona
                         mime_type=mime_type,
                         endpoint=upload_endpoint,
                         api_token=upload_api_token,
-                        proxy=proxy
+                        proxy=proxy,
+                        upload_folder=account_manager.config.get("upload_folder") if account_manager else None
                     )
                     
                     # 构建完整 URL
@@ -810,6 +856,14 @@ def parse_image_from_content(content: Dict, result: ChatResponse, proxy: Optiona
                     )
                     result.images.append(img)
                     print(f"[cfbed] 上传成功: {full_url}")
+                    try:
+                        if account_manager:
+                            items = account_manager.config.get("cfbed_uploaded_files") or []
+                            items.append({"src": upload_result["src"], "url": full_url, "mime_type": mime_type, "created_at": datetime.utcnow().isoformat()})
+                            account_manager.config["cfbed_uploaded_files"] = items
+                            account_manager.save_config()
+                    except Exception:
+                        pass
                 else:
                     # 本地缓存
                     if is_video:
@@ -866,7 +920,8 @@ def parse_attachment(att: Dict, result: ChatResponse, proxy: Optional[str] = Non
                     mime_type=mime_type,
                     endpoint=upload_endpoint,
                     api_token=upload_api_token,
-                    proxy=proxy
+                    proxy=proxy,
+                    upload_folder=account_manager.config.get("upload_folder") if account_manager else None
                 )
                 
                 # 构建完整 URL
@@ -887,6 +942,14 @@ def parse_attachment(att: Dict, result: ChatResponse, proxy: Optional[str] = Non
                 )
                 result.images.append(img)
                 print(f"[cfbed] 上传成功: {full_url}")
+                try:
+                    if account_manager:
+                        items = account_manager.config.get("cfbed_uploaded_files") or []
+                        items.append({"src": upload_result["src"], "url": full_url, "mime_type": mime_type, "created_at": datetime.utcnow().isoformat()})
+                        account_manager.config["cfbed_uploaded_files"] = items
+                        account_manager.save_config()
+                except Exception:
+                    pass
             else:
                 # 本地缓存
                 suggested_name = att.get("name")
@@ -981,11 +1044,10 @@ def get_image_base_url(fallback_host_url: str, account_manager=None, request=Non
     return configured_url
 
 
-def detect_client_image_format(request=None, request_data=None, account_manager=None) -> str:
+def detect_client_image_format(request=None, request_data=None) -> str:
     """检测客户端支持的图片格式
     
     检测优先级：
-    0. 配置中的 image_output_mode（如果设置为 base64，强制使用 markdown）
     1. 请求参数中的 image_format 或 response_format（显式指定）
     2. User-Agent 检测（已知客户端）- 优先于消息格式检测
     3. 检查客户端发送的消息格式（如果发送数组格式，说明支持数组格式）
@@ -994,22 +1056,13 @@ def detect_client_image_format(request=None, request_data=None, account_manager=
     Args:
         request: Flask request 对象
         request_data: 请求的 JSON 数据
-        account_manager: 账号管理器（用于读取配置）
     
     Returns:
         "array" - 数组格式（OpenAI 标准）
         "markdown" - Markdown 格式
         "url" - 纯 URL 格式
     """
-    # 0. 检查配置中的 image_output_mode（最高优先级）
-    if account_manager and account_manager.config:
-        mode = account_manager.config.get("image_output_mode", "").lower().strip()
-        if mode == "base64":
-            return "markdown"  # base64 模式使用 markdown 格式返回
-        elif mode in ["array", "markdown", "url"]:
-            return mode
-    
-    # 1. 检查请求参数中的格式偏好
+    # 1. 检查请求参数中的格式偏好（最高优先级）
     if request_data:
         image_format = request_data.get('image_format') or request_data.get('response_format')
         if image_format in ['array', 'markdown', 'url']:
@@ -1084,7 +1137,7 @@ def build_openai_response_content(chat_response: ChatResponse, host_url: str, ac
     result_text = chat_response.text
     
     # 检测客户端支持的图片格式
-    image_format = detect_client_image_format(request, request_data, account_manager)
+    image_format = detect_client_image_format(request, request_data)
     
     # 如果有图片或视频
     if chat_response.images:
@@ -1199,4 +1252,3 @@ def build_openai_response_content(chat_response: ChatResponse, host_url: str, ac
     
     # 没有图片，返回纯文本
     return result_text
-
