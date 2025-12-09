@@ -782,8 +782,8 @@ def register_routes(app):
                                 "finish_reason": "stop"
                             }]
                         }
-                        yield f"data: {json.dumps(end_chunk, ensure_ascii=False)}\n\n"
-                        yield "data: [DONE]\n\n"
+                        yield f"{json.dumps(end_chunk, ensure_ascii=False)}\n"
+                        yield "[DONE]\n"
                     except Exception as e:
                         # 错误处理
                         error_chunk = {
@@ -798,8 +798,8 @@ def register_routes(app):
                             }],
                             "error": {"message": str(e)}
                         }
-                        yield f"data: {json.dumps(error_chunk, ensure_ascii=False)}\n\n"
-                        yield "data: [DONE]\n\n"
+                        yield f"{json.dumps(error_chunk, ensure_ascii=False)}\n"
+                        yield "[DONE]\n"
                 
                 # 对于流式响应，在开始时就记录日志
                 response_time = int((time.time() - request_start_time) * 1000)
@@ -818,7 +818,7 @@ def register_routes(app):
                 except Exception:
                     pass
                 
-                return Response(generate(), mimetype='text/event-stream')
+                return Response(generate(), mimetype='application/x-ndjson')
             
             # 非流式模式：使用原来的逻辑
             if chat_response is None:
@@ -856,7 +856,7 @@ def register_routes(app):
                                             "finish_reason": None
                                         }]
                                     }
-                                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                                    yield f"{json.dumps(chunk, ensure_ascii=False)}\n"
                         
                         # 然后发送图片/视频部分
                         # 注意：流式响应中 delta.content 必须是字符串，不能是对象
@@ -879,7 +879,7 @@ def register_routes(app):
                                         "finish_reason": None
                                     }]
                                 }
-                                yield f"data: {json.dumps(image_chunk, ensure_ascii=False)}\n\n"
+                                yield f"{json.dumps(image_chunk, ensure_ascii=False)}\n"
                     else:
                         # 纯文本，分块发送
                         if response_content and response_content.strip():
@@ -896,7 +896,7 @@ def register_routes(app):
                                         "finish_reason": None
                                     }]
                                 }
-                                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                                yield f"{json.dumps(chunk, ensure_ascii=False)}\n"
                     
                     # 发送结束标记
                     end_chunk = {
@@ -910,8 +910,8 @@ def register_routes(app):
                             "finish_reason": "stop"
                         }]
                     }
-                    yield f"data: {json.dumps(end_chunk, ensure_ascii=False)}\n\n"
-                    yield "data: [DONE]\n\n"
+                    yield f"{json.dumps(end_chunk, ensure_ascii=False)}\n"
+                    yield "[DONE]\n"
                 
                 # 对于流式响应，在开始时就记录日志（响应大小无法准确计算）
                 response_time = int((time.time() - request_start_time) * 1000)
@@ -930,7 +930,7 @@ def register_routes(app):
                 except Exception:
                     pass  # 日志记录失败不应影响主流程
 
-                return Response(generate(), mimetype='text/event-stream')
+                return Response(generate(), mimetype='application/x-ndjson')
             else:
                 # 非流式响应：response_content 可能是字符串或数组
                 response = {

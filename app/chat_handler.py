@@ -172,7 +172,7 @@ def stream_chat_realtime_generator(jwt: str, sess_name: str, message: str,
             "model": model_name,
             "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]
         }
-        yield f"data: {json.dumps(role_chunk, ensure_ascii=False)}\n\n"
+        yield f"{json.dumps(role_chunk, ensure_ascii=False)}\n"
     
     try:
         resp = requests.post(
@@ -269,7 +269,7 @@ def stream_chat_realtime_generator(jwt: str, sess_name: str, message: str,
                             "model": model_name,
                             "choices": [{"index": 0, "delta": {"content": filtered_text}, "finish_reason": None}]
                         }
-                        yield f"data: {json.dumps(text_chunk, ensure_ascii=False)}\n\n"
+                        yield f"{json.dumps(text_chunk, ensure_ascii=False)}\n"
     
     # 处理通过fileId引用的图片/视频（需要下载，在流式结束后处理）
     if file_ids_list and current_session:
@@ -359,7 +359,7 @@ def stream_chat_realtime_generator(jwt: str, sess_name: str, message: str,
                                     "finish_reason": None
                                 }]
                             }
-                            yield f"data: {json.dumps(image_chunk, ensure_ascii=False)}\n\n"
+                            yield f"{json.dumps(image_chunk, ensure_ascii=False)}\n"
                     else:
                         # 使用本地缓存
                         if is_video:
@@ -390,7 +390,7 @@ def stream_chat_realtime_generator(jwt: str, sess_name: str, message: str,
                                             "finish_reason": None
                                         }]
                                     }
-                                    yield f"data: {json.dumps(video_chunk, ensure_ascii=False)}\n\n"
+                                    yield f"{json.dumps(video_chunk, ensure_ascii=False)}\n"
                         else:
                             file_data = download_file_with_jwt(jwt, session_path, fid, proxy)
                             if file_data:
@@ -421,7 +421,7 @@ def stream_chat_realtime_generator(jwt: str, sess_name: str, message: str,
                                                 "finish_reason": None
                                             }]
                                         }
-                                        yield f"data: {json.dumps(image_chunk, ensure_ascii=False)}\n\n"
+                                        yield f"{json.dumps(image_chunk, ensure_ascii=False)}\n"
                 except Exception as e:
                     print(f"[WARNING] 下载文件失败 {fid}: {e}")
         except Exception as e:
