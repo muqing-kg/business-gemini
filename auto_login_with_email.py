@@ -159,6 +159,297 @@ def select_tempmail_url(account_config: Optional[Dict] = None) -> tuple[str, Opt
     
     return selected_url, name
 
+def safe_fill_and_verify(page, selector: str, text: str, max_retries: int = 3, timeout: int = 10) -> bool:
+    """安全填写输入框并验证结果
+    
+    参考 test_band-main 项目的 safe_input 实现，确保输入成功后才继续。
+    
+    Args:
+        page: Playwright 页面对象
+        selector: CSS 选择器（支持多个选择器，用逗号分隔）
+        text: 要输入的文本
+        max_retries: 最大重试次数
+        timeout: 元素等待超时时间（秒）
+    
+    Returns:
+        bool: 输入是否成功
+    """
+    for attempt in range(max_retries):
+        try:
+            element = page.locator(selector).first
+            
+            # 等待元素可见
+            element.wait_for(state="visible", timeout=timeout * 1000)
+            
+            # 清空现有内容
+            element.clear()
+            page.wait_for_timeout(300)
+            
+            # 清理非 ASCII 字符（防止编码问题导致输入失败）
+            clean_text = ''.join(c for c in text if ord(c) < 128)
+            
+            # 填写内容
+            element.fill(clean_text)
+            page.wait_for_timeout(500)
+            
+            # 验证输入是否成功
+            actual_value = element.input_value()
+            if actual_value and clean_text in actual_value:
+                # 输入成功
+                return True
+            else:
+                # 输入值不匹配，重试
+                if attempt < max_retries - 1:
+                    print(f"[输入验证] ⚠ 输入值不匹配 (期望: '{clean_text[:20]}...', 实际: '{actual_value[:20] if actual_value else 'None'}...'), 重试 {attempt+1}/{max_retries}")
+                element.clear()
+                page.wait_for_timeout(500)
+                
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"[输入验证] ⚠ 填写失败 (尝试 {attempt+1}/{max_retries}): {e}")
+            page.wait_for_timeout(1000)
+    
+    print(f"[输入验证] ✗ 填写失败，已达最大重试次数 ({max_retries})")
+    return False
+
+def safe_fill_with_selectors(page, selectors: list, text: str, description: str = "", max_retries: int = 3, timeout: int = 10) -> bool:
+    """尝试多个选择器安全填写输入框
+    
+    按顺序尝试多个选择器，返回第一个成功的结果。
+    
+    Args:
+        page: Playwright 页面对象
+        selectors: CSS 选择器列表
+        text: 要输入的文本
+        description: 输入框描述（用于日志）
+        max_retries: 每个选择器的最大重试次数
+        timeout: 元素等待超时时间（秒）
+    
+    Returns:
+        bool: 输入是否成功
+    """
+    for selector in selectors:
+        try:
+            # 检查元素是否存在
+            element = page.locator(selector).first
+            if element.count() > 0:
+                if safe_fill_and_verify(page, selector, text, max_retries=max_retries, timeout=timeout):
+                    return True
+        except:
+            continue
+    
+    if description:
+        print(f"[输入验证] ✗ 所有选择器均失败: {description}")
+    return False
+
+def handle_welcome_dialog(page) -> bool:
+    """处理 Gemini Business 欢迎对话框 (Shadow DOM)
+    
+    参考 test_band-main 项目的 handle_welcome_dialog 实现。
+    登录成功后可能出现欢迎对话框，需要点击关闭才能继续。
+    该对话框使用了多层 Shadow DOM，普通选择器无法直接访问。
+    
+    Args:
+        page: Playwright 页面对象
+    
+    Returns:
+        bool: 是否成功处理（未出现对话框也返回 True）
+    """
+    try:
+        page.wait_for_timeout(2000)  # 等待对话框可能出现
+        
+        # 使用 JavaScript 处理 Shadow DOM
+        js_code = '''
+        function clickWelcomeButton() {
+            // 方法1: 标准 Shadow DOM 路径
+            const app = document.querySelector('ucs-standalone-app');
+            if (app && app.shadowRoot) {
+                const dialog = app.shadowRoot.querySelector('ucs-welcome-dialog');
+                if (dialog && dialog.shadowRoot) {
+                    const btn = dialog.shadowRoot.querySelector('md-text-button');
+                    if (btn) {
+                        if (btn.shadowRoot) {
+                            const innerBtn = btn.shadowRoot.querySelector('button');
+                            if (innerBtn) { 
+                                innerBtn.click(); 
+                                return { success: true, method: 'shadow-dom-inner' };
+                            }
+                        }
+                        btn.click();
+                        return { success: true, method: 'shadow-dom-outer' };
+                    }
+                }
+            }
+            
+            // 方法2: 尝试直接点击可能的关闭/确认按钮
+            const possibleButtons = [
+                'button[aria-label="Close"]',
+                'button[aria-label="关闭"]',
+                'button[aria-label="Got it"]',
+                'button[aria-label="知道了"]',
+                '[role="button"][aria-label]',
+                '.mdc-button',
+                '.mat-button',
+                'md-text-button',
+            ];
+            
+            for (const selector of possibleButtons) {
+                const btn = document.querySelector(selector);
+                if (btn) {
+                    btn.click();
+                    return { success: true, method: 'direct-selector', selector: selector };
+                }
+            }
+            
+            return { success: false };
+        }
+        return clickWelcomeButton();
+        '''
+        
+        result = page.evaluate(js_code)
+        if result and result.get('success'):
+            method = result.get('method', 'unknown')
+            print(f"[登录] ✓ 已关闭欢迎对话框 (方法: {method})")
+            return True
+        
+    except Exception as e:
+        # 对话框不存在或处理失败，不影响主流程
+        pass
+    
+    return True  # 即使没有对话框或处理失败，也不阻塞主流程
+
+def click_resend_code_button(page) -> bool:
+    """点击验证码重新发送按钮
+    
+    参考 test_band-main 项目的 click_resend_button 实现。
+    当验证码获取失败或过期时，可以尝试点击重新发送按钮。
+    
+    Args:
+        page: Playwright 页面对象
+    
+    Returns:
+        bool: 是否成功点击
+    """
+    # 重发按钮选择器列表（中英文）
+    resend_selectors = [
+        'button[aria-label="Resend Code"]',
+        'button[aria-label="重新发送"]',
+        'button[aria-label="重新发送验证码"]',
+        'button:has-text("Resend")',
+        'button:has-text("重新发送")',
+        'button:has-text("重新发送验证码")',
+        '[role="button"]:has-text("Resend")',
+        '[role="button"]:has-text("重新发送")',
+    ]
+    
+    for selector in resend_selectors:
+        try:
+            element = page.locator(selector).first
+            if element.count() > 0 and element.is_visible():
+                element.click()
+                print(f"[登录] ✓ 已点击验证码重发按钮: {selector}")
+                page.wait_for_timeout(2000)  # 等待操作生效
+                return True
+        except:
+            continue
+    
+    # JavaScript 兜底：遍历所有按钮
+    try:
+        js_code = '''
+        function clickResendButton() {
+            const buttons = document.querySelectorAll('button, [role="button"]');
+            for (const btn of buttons) {
+                const text = btn.innerText || btn.textContent || '';
+                const ariaLabel = btn.getAttribute('aria-label') || '';
+                
+                if (text.includes('Resend') || text.includes('重新发送') ||
+                    ariaLabel.includes('Resend') || ariaLabel.includes('重新发送')) {
+                    btn.click();
+                    return { success: true, text: text.substring(0, 30) };
+                }
+            }
+            return { success: false };
+        }
+        return clickResendButton();
+        '''
+        
+        result = page.evaluate(js_code)
+        if result and result.get('success'):
+            print(f"[登录] ✓ 通过 JS 点击验证码重发按钮: {result.get('text', 'unknown')}")
+            page.wait_for_timeout(2000)
+            return True
+    except:
+        pass
+    
+    return False
+
+def click_verify_button_with_js_fallback(page) -> bool:
+    """点击验证按钮（带 JavaScript 兜底）
+    
+    参考 test_band-main 项目的 click_verify_button 实现。
+    先尝试使用 Playwright 选择器，失败后使用 JavaScript 遍历按钮。
+    
+    Args:
+        page: Playwright 页面对象
+    
+    Returns:
+        bool: 是否成功点击
+    """
+    # 验证按钮选择器列表
+    verify_selectors = [
+        'button[jsname="XooR8e"]',
+        'button[aria-label="验证"]',
+        'button[aria-label="Verify"]',
+        'button[type="submit"]',
+        'button:has-text("验证")',
+        'button:has-text("Verify")',
+    ]
+    
+    for selector in verify_selectors:
+        try:
+            element = page.locator(selector).first
+            if element.count() > 0 and element.is_visible():
+                element.click()
+                print(f"[登录] ✓ 已点击验证按钮: {selector}")
+                return True
+        except:
+            continue
+    
+    # JavaScript 兜底：遍历所有按钮
+    try:
+        js_code = '''
+        function clickVerifyButton() {
+            const buttons = document.querySelectorAll('button');
+            for (const btn of buttons) {
+                const jsname = btn.getAttribute('jsname');
+                const ariaLabel = btn.getAttribute('aria-label') || '';
+                const text = btn.innerText || btn.textContent || '';
+                const type = btn.getAttribute('type');
+                
+                // 匹配验证按钮的多种特征
+                if (jsname === 'XooR8e' || 
+                    ariaLabel === '验证' || ariaLabel === 'Verify' ||
+                    text.includes('验证') || text.includes('Verify') ||
+                    (type === 'submit' && btn.classList.contains('YUhpIc-LgbsSe'))) {
+                    btn.click();
+                    return { success: true, method: 'js', text: text.substring(0, 20) };
+                }
+            }
+            return { success: false };
+        }
+        return clickVerifyButton();
+        '''
+        
+        result = page.evaluate(js_code)
+        if result and result.get('success'):
+            print(f"[登录] ✓ 通过 JS 点击验证按钮: {result.get('text', 'unknown')}")
+            return True
+    except:
+        pass
+    
+    print("[登录] ⚠ 未能找到验证按钮")
+    return False
+
 def extract_verification_code(text: str) -> Optional[str]:
     """从文本中提取验证码（支持中英文格式）"""
     # 先按行精确匹配提示语，避免误匹配 Cloudflare/Logo/verification 等单词
@@ -203,17 +494,23 @@ def extract_verification_code(text: str) -> Optional[str]:
     # 如果行级匹配失败，再用全局模式做兜底
     patterns = [
         # 中文模式
-        r'一次性验证码为[：:]\s*([A-Z0-9]{6})',
-        r'一次性验证为[：:]\s*([A-Z0-9]{6})',  # 处理被截断的情况
-        r'验证码为[：:]\s*([A-Z0-9]{6})',
-        r'验证为[：:]\s*([A-Z0-9]{6})',  # 处理被截断的情况
-        r'验证码[：:是]\s*([A-Z0-9]{6})',
-        r'您的验证码是[：:]\s*([A-Z0-9]{6})',
+        r'一次性验证码为[：:]?\s*([A-Z0-9]{6})',
+        r'一次性验证为[：:]?\s*([A-Z0-9]{6})',  # 处理被截断的情况
+        r'验证码为[：:]?\s*([A-Z0-9]{6})',
+        r'验证为[：:]?\s*([A-Z0-9]{6})',  # 处理被截断的情况
+        r'验证码[：:是]?\s*([A-Z0-9]{6})',
+        r'您的验证码是[：:]?\s*([A-Z0-9]{6})',
         # 英文模式
-        r'your one-time verification code is[：:]\s*([A-Z0-9]{6})',
-        r'one-time verification code is[：:]\s*([A-Z0-9]{6})',
-        r'verification code is[：:]\s*([A-Z0-9]{6})',
-        r'code is[：:]\s*([A-Z0-9]{6})',
+        r'your one-time verification code is[：:]?\s*([A-Z0-9]{6})',
+        r'one-time verification code is[：:]?\s*([A-Z0-9]{6})',
+        r'verification code is[：:]?\s*([A-Z0-9]{6})',
+        r'code is[：:]?\s*([A-Z0-9]{6})',
+        # HTML 元素模式（参考 test_band-main）
+        r'class=["\']?verification-code["\']?[^>]*>([A-Z0-9]{6})</span>',
+        r'verification-code[^>]*>([A-Z0-9]{6})<',
+        r'>([A-Z0-9]{6})</span>',  # 简单的 span 包裹
+        r'font-size:\s*28px[^>]*>([A-Z0-9]{6})<',  # 大字号通常是验证码
+        r'font-size:\s*24px[^>]*>([A-Z0-9]{6})<',
     ]
 
     for pattern in patterns:
@@ -1272,11 +1569,17 @@ def login_with_email_and_code(page, email: str, code: str) -> bool:
                 return True
             
             # 如果检测到 auth.business.gemini.google，这可能是正常的中间跳转步骤
-            # 允许短暂停留在 auth 页面，继续等待最终跳转到主域名
+            # 允许较长时间停留在 auth 页面（特别是 signin-handler），继续等待最终跳转到主域名
             if "auth.business.gemini.google" in current_url:
                 # 不立即打印警告，先等待看是否会跳转到主域名（这是正常流程）
-                # 如果长时间停留在 auth 页面（超过 15 秒），才认为验证码可能无效
-                max_wait_auth = 15
+                # signin-handler 和 signin-callback 页面可能需要更长的处理时间
+                # 根据 URL 路径动态调整等待时间
+                if "signin-handler" in current_url or "signin-callback" in current_url:
+                    max_wait_auth = 40  # signin-handler 需要更长时间处理 SSO 回调
+                    print(f"[登录] 检测到 SSO 处理页面，延长等待时间至 {max_wait_auth} 秒")
+                else:
+                    max_wait_auth = 20  # 其他 auth 页面保持 20 秒
+                
                 waited_auth = 0
                 auth_detected = True
                 while waited_auth < max_wait_auth:
@@ -1284,6 +1587,7 @@ def login_with_email_and_code(page, email: str, code: str) -> bool:
                     # 每5秒打印一次当前URL
                     if waited_auth % 5 == 0 and waited_auth > 0:
                         print(f"[登录] 等待跳转中... 当前 URL: {current_url_auth} (已等待 {waited_auth} 秒)")
+                    
                     # 如果跳转到主域名，说明登录成功（这是正常流程）
                     if ("business.gemini.google" in current_url_auth 
                         and "accountverification" not in current_url_auth
@@ -1292,20 +1596,52 @@ def login_with_email_and_code(page, email: str, code: str) -> bool:
                         print("[登录] ✓ 登录成功！")
                         page.wait_for_timeout(3000)
                         return True
-                    # 如果跳转回 accountverification 页面，说明验证码错误，需要重新输入
+                    
+                    # 如果跳转回 accountverification 页面，说明验证码错误
                     if "accountverification" in current_url_auth and "verify-oob-code" in current_url_auth:
-                        print("[登录] ✗ 已跳转回验证码输入页面，验证码可能无效，需要重新获取验证码")
+                        print("[登录] ✗ 已跳转回验证码输入页面，验证码无效")
                         return "CODE_ERROR"
+                    
+                    # 检查页面文本中是否有明确的错误提示
+                    try:
+                        page_text = page.locator("body").text_content() or ""
+                        error_keywords = ["验证码有误", "code is incorrect", "invalid code", "验证码错误"]
+                        if any(kw.lower() in page_text.lower() for kw in error_keywords):
+                            print("[登录] ✗ 检测到验证码错误提示")
+                            return "CODE_ERROR"
+                    except:
+                        pass
+                    
                     # 如果已经不在 auth 页面，跳出这个循环，继续主循环
                     if "auth.business.gemini.google" not in current_url_auth:
                         auth_detected = False
                         break
-                    page.wait_for_timeout(1000)
-                    waited_auth += 1
+                    
+                    page.wait_for_timeout(2000)  # 改为 2 秒检查一次，更快响应
+                    waited_auth += 2
                 
-                # 如果等待超时仍在 auth 页面，才认为验证码可能无效
+                # 如果等待超时仍在 auth 页面，尝试主动导航到主页
                 if auth_detected and "auth.business.gemini.google" in page.url:
-                    print("[登录] ⚠ 在 auth 页面停留时间过长（15秒），验证码可能无效，需要重新获取验证码")
+                    final_url = page.url
+                    print(f"[登录] ⚠ 在 auth 页面停留 {max_wait_auth} 秒，尝试主动导航到主页...")
+                    
+                    try:
+                        # 尝试主动导航到主页，检查 Cookie 是否已设置成功
+                        page.goto("https://business.gemini.google/", wait_until="networkidle", timeout=30000)
+                        page.wait_for_timeout(5000)
+                        
+                        # 检查是否成功跳转到主页
+                        current_url_after_nav = page.url
+                        if "business.gemini.google/home" in current_url_after_nav or "/cid/" in current_url_after_nav:
+                            print("[登录] ✓ 主动导航成功，Cookie 已生效")
+                            return True
+                        else:
+                            print(f"[登录] ⚠ 主动导航后仍未到达主页: {current_url_after_nav}")
+                    except Exception as e:
+                        print(f"[登录] ⚠ 主动导航失败: {e}")
+                    
+                    # 主动导航失败，判定为验证码可能无效
+                    print("[登录] ✗ 主动导航失败，验证码可能无效")
                     return "CODE_ERROR"
             
             # 在等待跳转时，如果仍在验证码页面，检查是否有验证码错误提示
@@ -1571,6 +1907,10 @@ def extract_cookies_and_csesidx(page) -> Optional[Dict[str, str]]:
     
     # 再次等待，确保 Cookie 已设置
     page.wait_for_timeout(3000)
+    
+    # 处理可能出现的欢迎对话框（Shadow DOM）
+    # 参考 test_band-main 项目，登录成功后可能会弹出欢迎对话框
+    handle_welcome_dialog(page)
     
     # 获取所有 Cookie（重试机制）
     secure_c_ses = None

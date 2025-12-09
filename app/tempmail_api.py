@@ -105,6 +105,82 @@ class TempMailAPIClient:
         
         return None
     
+    def _is_mail_fresh(self, mail_data: dict, max_age_minutes: int = 2) -> bool:
+        """检查邮件是否是新鲜的（未过期）
+        
+        参考 test_band-main 项目的邮件时效性检测实现，避免使用过期验证码。
+        
+        Args:
+            mail_data: 邮件数据字典
+            max_age_minutes: 最大允许的邮件年龄（分钟）
+        
+        Returns:
+            bool: 邮件是否新鲜（未过期）
+        """
+        import re
+        from datetime import datetime, timezone, timedelta
+        
+        try:
+            # 方法1: 尝试从 raw 内容中提取 Received 时间
+            raw_content = mail_data.get('raw', '')
+            if raw_content:
+                received_match = re.search(r'Received:.*?;\s*(.*?)\r?\n', raw_content, re.DOTALL)
+                if received_match:
+                    date_str = received_match.group(1).strip()
+                    try:
+                        from email.utils import parsedate_to_datetime
+                        email_time = parsedate_to_datetime(date_str)
+                        current_time = datetime.now(timezone.utc)
+                        
+                        age = current_time - email_time
+                        if age > timedelta(minutes=max_age_minutes):
+                            mail_id = mail_data.get("id", "未知")
+                            log_print(f"[临时邮箱 API] ⚠ 忽略过期邮件 ID {mail_id} (年龄: {age.total_seconds()/60:.1f} 分钟，上限: {max_age_minutes} 分钟)", _level="INFO")
+                            return False
+                    except Exception as e:
+                        # 日期解析失败，不过滤
+                        pass
+            
+            # 方法2: 尝试从 created_at 或 date 字段获取时间
+            for date_field in ['created_at', 'date', 'received_at', 'timestamp']:
+                date_value = mail_data.get(date_field)
+                if date_value:
+                    try:
+                        # 尝试解析 ISO 格式
+                        if isinstance(date_value, str):
+                            # 处理各种日期格式
+                            for fmt in ['%Y-%m-%dT%H:%M:%S.%fZ', '%Y-%m-%dT%H:%M:%SZ', '%Y-%m-%d %H:%M:%S']:
+                                try:
+                                    email_time = datetime.strptime(date_value, fmt).replace(tzinfo=timezone.utc)
+                                    break
+                                except ValueError:
+                                    continue
+                            else:
+                                continue
+                        elif isinstance(date_value, (int, float)):
+                            # Unix 时间戳
+                            email_time = datetime.fromtimestamp(date_value, tz=timezone.utc)
+                        else:
+                            continue
+                        
+                        current_time = datetime.now(timezone.utc)
+                        age = current_time - email_time
+                        if age > timedelta(minutes=max_age_minutes):
+                            mail_id = mail_data.get("id", "未知")
+                            log_print(f"[临时邮箱 API] ⚠ 忽略过期邮件 ID {mail_id} (年龄: {age.total_seconds()/60:.1f} 分钟，来源字段: {date_field})", _level="INFO")
+                            return False
+                        break
+                    except Exception:
+                        continue
+            
+            # 默认认为邮件是新鲜的
+            return True
+            
+        except Exception as e:
+            # 解析失败时默认认为是新鲜的，不阻塞流程
+            log_print(f"[临时邮箱 API] ⚠ 邮件时效性检测失败: {e}", _level="WARNING")
+            return True
+    
     def generate_email(self) -> Optional[str]:
         """通过 API 生成新的临时邮箱（带重试机制）
         
