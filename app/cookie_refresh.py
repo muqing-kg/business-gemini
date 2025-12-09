@@ -1469,7 +1469,9 @@ def cookie_refresh_worker():
         started_count += 1
         print(f"[浏览器会话] 账号 {idx} 的浏览器会话线程已启动")
     
-    print(f"[浏览器会话] 已为 {started_count} 个账号启动浏览器会话（每2小时自动刷新）")
+    # 从配置读取刷新间隔（小时）
+    refresh_interval_hours = account_manager.config.get("auto_refresh_interval", 2)
+    print(f"[浏览器会话] 已为 {started_count} 个账号启动浏览器会话（每 {refresh_interval_hours} 小时自动刷新）")
 
 
 def auto_refresh_expired_cookies_worker():
@@ -1489,10 +1491,12 @@ def auto_refresh_expired_cookies_worker():
     time.sleep(5)
     
     # 不再检查配置，因为 start_auto_refresh_thread 已经确保配置已启用
-    print("[Cookie 自动刷新] 后台线程已启动，将每2小时检查一次过期的 Cookie")
+    # 从配置读取刷新间隔（小时）
+    refresh_interval_hours = account_manager.config.get("auto_refresh_interval", 2)
+    print(f"[Cookie 自动刷新] 后台线程已启动，将每 {refresh_interval_hours} 小时检查一次过期的 Cookie")
     
-    # 检查间隔：2小时
-    CHECK_INTERVAL = 60 * 60 * 2
+    # 检查间隔：根据配置动态计算
+    CHECK_INTERVAL = 60 * 60 * refresh_interval_hours
     
     # 记录上次检查时间，用于日志
     last_check_time = time.time()
@@ -1620,6 +1624,10 @@ def auto_refresh_expired_cookies_worker():
     
     while True:
         try:
+            # 每次循环动态读取配置的刷新间隔（用户可能在运行时修改）
+            refresh_interval_hours = account_manager.config.get("auto_refresh_interval", 2)
+            CHECK_INTERVAL = 60 * 60 * refresh_interval_hours
+            
             # 等待立即刷新事件或定期检查时间
             # 使用 wait 的超时功能，既能响应立即刷新，又能定期检查
             event_set = _immediate_refresh_event.wait(timeout=CHECK_INTERVAL)
@@ -1636,7 +1644,7 @@ def auto_refresh_expired_cookies_worker():
                 check_count += 1
                 current_time = time.time()
                 time_since_last = int(current_time - last_check_time)
-                print(f"[Cookie 自动刷新] 第 {check_count} 次定期检查（距上次 {time_since_last} 秒）")
+                print(f"[Cookie 自动刷新] 第 {check_count} 次定期检查（间隔 {refresh_interval_hours} 小时，距上次 {time_since_last} 秒）")
                 _check_and_refresh_expired()
                 last_check_time = current_time
             

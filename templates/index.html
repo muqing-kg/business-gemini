@@ -1,33 +1,101 @@
 <!DOCTYPE html>
 <html lang="zh-CN" data-theme="light">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Business Gemini Pool 管理控制台</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}">
-    
+
     <!-- Socket.IO 客户端库 -->
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
 </head>
+
 <body>
     <!-- [NEW] SVG Icon Definitions -->
     <svg width="0" height="0" style="display: none;">
-        <symbol id="icon-users" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></symbol>
-        <symbol id="icon-robot" viewBox="0 0 24 24"><path d="M12 8V4H8"></path><rect x="4" y="12" width="16" height="8" rx="2"></rect><path d="M2 12h20"></path><path d="M12 12V8a4 4 0 0 0-4-4"></path></symbol>
-        <symbol id="icon-settings" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 0 2l-.15.08a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l-.22-.38a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1 0-2l.15-.08a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></symbol>
-        <symbol id="icon-server" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></symbol>
-        <symbol id="icon-list" viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></symbol>
-        <symbol id="icon-plus" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></symbol>
-        <symbol id="icon-check" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></symbol>
-        <symbol id="icon-x" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></symbol>
-        <symbol id="icon-refresh" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></symbol>
-        <symbol id="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></symbol>
-        <symbol id="icon-moon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></symbol>
-        <symbol id="icon-message" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></symbol>
-        <symbol id="icon-play" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></symbol>
-        <symbol id="icon-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></symbol>
-        <symbol id="icon-zap" viewBox="0 0 24 24"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></symbol>
-        <symbol id="icon-key" viewBox="0 0 24 24"><path d="M21 2l-2 2"></path><path d="M9 6l-2 2"></path><circle cx="7.5" cy="15.5" r="5.5"></circle><path d="M21 2l-9.6 9.6"></path><path d="M15.5 7.5l3 3"></path><path d="M16 13l-3-3"></path></symbol>
+        <symbol id="icon-users" viewBox="0 0 24 24">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+            <circle cx="9" cy="7" r="4"></circle>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+        </symbol>
+        <symbol id="icon-robot" viewBox="0 0 24 24">
+            <path d="M12 8V4H8"></path>
+            <rect x="4" y="12" width="16" height="8" rx="2"></rect>
+            <path d="M2 12h20"></path>
+            <path d="M12 12V8a4 4 0 0 0-4-4"></path>
+        </symbol>
+        <symbol id="icon-settings" viewBox="0 0 24 24">
+            <path
+                d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 0 2l-.15.08a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l-.22-.38a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1 0-2l.15-.08a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z">
+            </path>
+            <circle cx="12" cy="12" r="3"></circle>
+        </symbol>
+        <symbol id="icon-server" viewBox="0 0 24 24">
+            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+            <line x1="6" y1="6" x2="6.01" y2="6"></line>
+            <line x1="6" y1="18" x2="6.01" y2="18"></line>
+        </symbol>
+        <symbol id="icon-list" viewBox="0 0 24 24">
+            <line x1="8" y1="6" x2="21" y2="6"></line>
+            <line x1="8" y1="12" x2="21" y2="12"></line>
+            <line x1="8" y1="18" x2="21" y2="18"></line>
+            <line x1="3" y1="6" x2="3.01" y2="6"></line>
+            <line x1="3" y1="12" x2="3.01" y2="12"></line>
+            <line x1="3" y1="18" x2="3.01" y2="18"></line>
+        </symbol>
+        <symbol id="icon-plus" viewBox="0 0 24 24">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+        </symbol>
+        <symbol id="icon-check" viewBox="0 0 24 24">
+            <polyline points="20 6 9 17 4 12"></polyline>
+        </symbol>
+        <symbol id="icon-x" viewBox="0 0 24 24">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+        </symbol>
+        <symbol id="icon-refresh" viewBox="0 0 24 24">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+        </symbol>
+        <symbol id="icon-sun" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="5"></circle>
+            <line x1="12" y1="1" x2="12" y2="3"></line>
+            <line x1="12" y1="21" x2="12" y2="23"></line>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+            <line x1="1" y1="12" x2="3" y2="12"></line>
+            <line x1="21" y1="12" x2="23" y2="12"></line>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </symbol>
+        <symbol id="icon-moon" viewBox="0 0 24 24">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </symbol>
+        <symbol id="icon-message" viewBox="0 0 24 24">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+        </symbol>
+        <symbol id="icon-play" viewBox="0 0 24 24">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+        </symbol>
+        <symbol id="icon-pause" viewBox="0 0 24 24">
+            <rect x="6" y="4" width="4" height="16"></rect>
+            <rect x="14" y="4" width="4" height="16"></rect>
+        </symbol>
+        <symbol id="icon-zap" viewBox="0 0 24 24">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+        </symbol>
+        <symbol id="icon-key" viewBox="0 0 24 24">
+            <path d="M21 2l-2 2"></path>
+            <path d="M9 6l-2 2"></path>
+            <circle cx="7.5" cy="15.5" r="5.5"></circle>
+            <path d="M21 2l-9.6 9.6"></path>
+            <path d="M15.5 7.5l3 3"></path>
+            <path d="M16 13l-3-3"></path>
+        </symbol>
     </svg>
 
     <div class="container">
@@ -47,14 +115,21 @@
                         <option value="ERROR">ERROR</option>
                     </select>
                 </div>
-                <button class="btn btn-outline" id="loginButton" style="padding: 8px 12px;" onclick="showLoginModal()">登录</button>
-                <a href="chat_history.html" class="btn btn-primary" style="padding: 8px 16px; font-size: 14px; text-decoration: none; display: flex; align-items: center; gap: 6px;" title="进入在线对话">
-                    <svg class="icon" style="width: 16px; height: 16px;"><use xlink:href="#icon-message"></use></svg>
+                <button class="btn btn-outline" id="loginButton" style="padding: 8px 12px;"
+                    onclick="showLoginModal()">登录</button>
+                <a href="chat_history.html" class="btn btn-primary"
+                    style="padding: 8px 16px; font-size: 14px; text-decoration: none; display: flex; align-items: center; gap: 6px;"
+                    title="进入在线对话">
+                    <svg class="icon" style="width: 16px; height: 16px;">
+                        <use xlink:href="#icon-message"></use>
+                    </svg>
                     在线对话
                 </a>
                 <button class="theme-toggle" onclick="toggleTheme()" title="切换主题">
                     <span id="themeIconContainer">
-                        <svg class="icon"><use xlink:href="#icon-sun"></use></svg>
+                        <svg class="icon">
+                            <use xlink:href="#icon-sun"></use>
+                        </svg>
                     </span>
                 </button>
             </div>
@@ -63,19 +138,27 @@
         <!-- Tabs -->
         <div class="tabs">
             <button class="tab active" onclick="switchTab('accounts')">
-                <svg class="icon tab-icon"><use xlink:href="#icon-users"></use></svg>
+                <svg class="icon tab-icon">
+                    <use xlink:href="#icon-users"></use>
+                </svg>
                 账号管理
             </button>
             <button class="tab" onclick="switchTab('models')">
-                <svg class="icon tab-icon"><use xlink:href="#icon-robot"></use></svg>
+                <svg class="icon tab-icon">
+                    <use xlink:href="#icon-robot"></use>
+                </svg>
                 模型管理
             </button>
             <button class="tab" onclick="switchTab('settings')">
-                <svg class="icon tab-icon"><use xlink:href="#icon-settings"></use></svg>
+                <svg class="icon tab-icon">
+                    <use xlink:href="#icon-settings"></use>
+                </svg>
                 系统设置
             </button>
             <button class="tab" onclick="switchTab('apiKeys')">
-                <svg class="icon tab-icon"><use xlink:href="#icon-key"></use></svg>
+                <svg class="icon tab-icon">
+                    <use xlink:href="#icon-key"></use>
+                </svg>
                 API 密钥管理
             </button>
         </div>
@@ -87,7 +170,9 @@
                 <div class="stat-card">
                     <div class="stat-info-top">
                         <p>总账号数</p>
-                        <div class="stat-icon blue"><svg class="icon"><use xlink:href="#icon-users"></use></svg></div>
+                        <div class="stat-icon blue"><svg class="icon">
+                                <use xlink:href="#icon-users"></use>
+                            </svg></div>
                     </div>
                     <div class="stat-info-bottom">
                         <h3 id="totalAccounts">0</h3>
@@ -96,7 +181,9 @@
                 <div class="stat-card">
                     <div class="stat-info-top">
                         <p>可用账号</p>
-                        <div class="stat-icon green"><svg class="icon"><use xlink:href="#icon-check"></use></svg></div>
+                        <div class="stat-icon green"><svg class="icon">
+                                <use xlink:href="#icon-check"></use>
+                            </svg></div>
                     </div>
                     <div class="stat-info-bottom">
                         <h3 id="availableAccounts">0</h3>
@@ -105,7 +192,9 @@
                 <div class="stat-card">
                     <div class="stat-info-top">
                         <p>不可用账号</p>
-                        <div class="stat-icon red"><svg class="icon"><use xlink:href="#icon-x"></use></svg></div>
+                        <div class="stat-icon red"><svg class="icon">
+                                <use xlink:href="#icon-x"></use>
+                            </svg></div>
                     </div>
                     <div class="stat-info-bottom">
                         <h3 id="unavailableAccounts">0</h3>
@@ -114,7 +203,9 @@
                 <div class="stat-card">
                     <div class="stat-info-top">
                         <p>当前轮训索引</p>
-                        <div class="stat-icon yellow"><svg class="icon"><use xlink:href="#icon-refresh"></use></svg></div>
+                        <div class="stat-icon yellow"><svg class="icon">
+                                <use xlink:href="#icon-refresh"></use>
+                            </svg></div>
                     </div>
                     <div class="stat-info-bottom">
                         <h3 id="currentIndex">0</h3>
@@ -125,16 +216,23 @@
             <div class="card">
                 <div class="card-header">
                     <div class="card-title">
-                        <svg class="icon card-title-icon"><use xlink:href="#icon-list"></use></svg>
+                        <svg class="icon card-title-icon">
+                            <use xlink:href="#icon-list"></use>
+                        </svg>
                         账号列表
                     </div>
                     <div style="display: flex; gap: 12px; align-items: center;">
-                        <a href="account_extractor.html" target="_blank" class="btn btn-outline" style="text-decoration: none;">
-                            <svg class="icon"><use xlink:href="#icon-zap"></use></svg>
+                        <a href="account_extractor.html" target="_blank" class="btn btn-outline"
+                            style="text-decoration: none;">
+                            <svg class="icon">
+                                <use xlink:href="#icon-zap"></use>
+                            </svg>
                             账号提取工具
                         </a>
                         <button class="btn btn-primary" onclick="showAddAccountModal()">
-                            <svg class="icon"><use xlink:href="#icon-plus"></use></svg>
+                            <svg class="icon">
+                                <use xlink:href="#icon-plus"></use>
+                            </svg>
                             添加账号
                         </button>
                     </div>
@@ -163,11 +261,15 @@
             <div class="card">
                 <div class="card-header">
                     <div class="card-title">
-                        <svg class="icon card-title-icon"><use xlink:href="#icon-robot"></use></svg>
+                        <svg class="icon card-title-icon">
+                            <use xlink:href="#icon-robot"></use>
+                        </svg>
                         模型列表
                     </div>
                     <button class="btn btn-primary" onclick="showAddModelModal()">
-                        <svg class="icon"><use xlink:href="#icon-plus"></use></svg>
+                        <svg class="icon">
+                            <use xlink:href="#icon-plus"></use>
+                        </svg>
                         添加模型
                     </button>
                 </div>
@@ -195,7 +297,9 @@
             <div class="card">
                 <div class="card-header">
                     <div class="card-title">
-                         <svg class="icon card-title-icon"><use xlink:href="#icon-settings"></use></svg>
+                        <svg class="icon card-title-icon">
+                            <use xlink:href="#icon-settings"></use>
+                        </svg>
                         系统配置
                     </div>
                 </div>
@@ -204,16 +308,24 @@
                         <div class="settings-section">
                             <h3>代理设置</h3>
                             <div class="form-group">
-                                <div style="display: flex; align-items: center; gap: 16px; padding: 16px; background: var(--card-bg); border: 2px solid var(--border); border-radius: var(--radius-md); transition: var(--transition-ease);" id="proxyContainer">
+                                <div style="display: flex; align-items: center; gap: 16px; padding: 16px; background: var(--card-bg); border: 2px solid var(--border); border-radius: var(--radius-md); transition: var(--transition-ease);"
+                                    id="proxyContainer">
                                     <div style="flex: 1;">
                                         <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
-                                            <svg class="icon" style="width: 20px; height: 20px; color: var(--primary);"><use xlink:href="#icon-server"></use></svg>
-                                            <label style="font-size: 16px; font-weight: 600; color: var(--text-main); cursor: pointer; margin: 0;" for="proxyEnabled">启用代理</label>
+                                            <svg class="icon" style="width: 20px; height: 20px; color: var(--primary);">
+                                                <use xlink:href="#icon-server"></use>
+                                            </svg>
+                                            <label
+                                                style="font-size: 16px; font-weight: 600; color: var(--text-main); cursor: pointer; margin: 0;"
+                                                for="proxyEnabled">启用代理</label>
                                         </div>
-                                        <small style="display: block; color: var(--text-muted); margin-left: 32px;">启用后才会使用配置的代理地址，禁用时不会使用系统默认代理</small>
+                                        <small
+                                            style="display: block; color: var(--text-muted); margin-left: 32px;">启用后才会使用配置的代理地址，禁用时不会使用系统默认代理</small>
                                     </div>
-                                    <label class="toggle-switch" for="proxyEnabled" style="position: relative; display: inline-block; width: 56px; height: 32px; cursor: pointer; flex-shrink: 0;">
-                                        <input type="checkbox" id="proxyEnabled" style="opacity: 0; width: 0; height: 0;">
+                                    <label class="toggle-switch" for="proxyEnabled"
+                                        style="position: relative; display: inline-block; width: 56px; height: 32px; cursor: pointer; flex-shrink: 0;">
+                                        <input type="checkbox" id="proxyEnabled"
+                                            style="opacity: 0; width: 0; height: 0;">
                                         <span class="toggle-slider"></span>
                                     </label>
                                 </div>
@@ -238,12 +350,14 @@
                             <h3>文件上传服务 (cfbed)</h3>
                             <div class="form-group">
                                 <label class="form-label" for="uploadEndpoint">上传端点</label>
-                                <input type="text" class="form-input" id="uploadEndpoint" placeholder="https://cfbed.sanyue.de/upload">
+                                <input type="text" class="form-input" id="uploadEndpoint"
+                                    placeholder="https://cfbed.sanyue.de/upload">
                                 <small>cfbed 上传服务地址，配置后将自动上传生成的图片/视频到公网</small>
                             </div>
                             <div class="form-group">
                                 <label class="form-label" for="uploadApiToken">API Token</label>
-                                <input type="password" class="form-input" id="uploadApiToken" placeholder="从 cfbed 管理界面获取的 API Token">
+                                <input type="password" class="form-input" id="uploadApiToken"
+                                    placeholder="从 cfbed 管理界面获取的 API Token">
                                 <small>需要 upload 权限的 API Token</small>
                             </div>
                             <div class="form-group">
@@ -253,8 +367,10 @@
                             </div>
                             <div class="form-group">
                                 <label class="form-label" for="autoCleanupEnabled">自动清理上传文件</label>
-                                <label class="toggle-switch" for="autoCleanupEnabled" style="position: relative; display: inline-block; width: 56px; height: 32px; cursor: pointer;">
-                                    <input type="checkbox" id="autoCleanupEnabled" style="opacity: 0; width: 0; height: 0;">
+                                <label class="toggle-switch" for="autoCleanupEnabled"
+                                    style="position: relative; display: inline-block; width: 56px; height: 32px; cursor: pointer;">
+                                    <input type="checkbox" id="autoCleanupEnabled"
+                                        style="opacity: 0; width: 0; height: 0;">
                                     <span class="toggle-slider"></span>
                                 </label>
                             </div>
@@ -269,16 +385,36 @@
                             </div>
                             <div class="form-group">
                                 <label class="form-label" for="imageBaseUrl">图片基础 URL（可选）</label>
-                                <input type="text" class="form-input" id="imageBaseUrl" placeholder="https://cfbed.sanyue.de">
+                                <input type="text" class="form-input" id="imageBaseUrl"
+                                    placeholder="https://cfbed.sanyue.de">
                                 <small>图片访问基础 URL，留空则从上传端点自动推断</small>
                             </div>
                             <div class="form-group">
                                 <label class="form-label" for="chatStreamEnabled">流式开关</label>
-                                <label class="toggle-switch" for="chatStreamEnabled" style="position: relative; display: inline-block; width: 56px; height: 32px; cursor: pointer;">
-                                    <input type="checkbox" id="chatStreamEnabled" style="opacity: 0; width: 0; height: 0;" checked>
+                                <label class="toggle-switch" for="chatStreamEnabled"
+                                    style="position: relative; display: inline-block; width: 56px; height: 32px; cursor: pointer;">
+                                    <input type="checkbox" id="chatStreamEnabled"
+                                        style="opacity: 0; width: 0; height: 0;" checked>
                                     <span class="toggle-slider"></span>
                                 </label>
                                 <small>默认开启流式</small>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="showThinkingProcess">显示思考过程</label>
+                                <div style="display: flex; align-items: center; gap: 16px;">
+                                    <label class="toggle-switch" for="showThinkingProcess"
+                                        style="position: relative; display: inline-block; width: 56px; height: 32px; cursor: pointer;">
+                                        <input type="checkbox" id="showThinkingProcess"
+                                            style="opacity: 0; width: 0; height: 0;">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                    <select class="form-select" id="thinkingOutputMode" style="width: auto;">
+                                        <option value="html">折叠显示</option>
+                                        <option value="reasoning_content">独立字段</option>
+                                    </select>
+                                </div>
+                                <small>开启后，AI 的思考过程将会显示。"折叠显示"将思考内容放在可折叠区域；"独立字段"将思考内容作为 reasoning_content
+                                    字段输出（需客户端支持）</small>
                             </div>
                             <!-- 图片输出模式选择移除，改为后端自动检测 -->
                             <div style="display: flex; gap: 12px;">
@@ -292,7 +428,8 @@
                             <h3>临时邮箱 Worker API</h3>
                             <div class="form-group">
                                 <label class="form-label" for="tempmailWorkerUrl">Worker API 地址（可选）</label>
-                                <input type="text" class="form-input" id="tempmailWorkerUrl" placeholder="https://worker-name.your-subdomain.workers.dev">
+                                <input type="text" class="form-input" id="tempmailWorkerUrl"
+                                    placeholder="https://worker-name.your-subdomain.workers.dev">
                                 <small>临时邮箱 Worker API 地址，如果 Worker 和前端在不同域名，需要配置此地址。留空则从临时邮箱 URL 自动提取。</small>
                             </div>
                             <div style="display: flex; gap: 12px;">
@@ -305,29 +442,55 @@
                         <div class="settings-section">
                             <h3>Cookie 自动刷新</h3>
                             <div class="form-group">
-                                <div style="display: flex; align-items: center; gap: 16px; padding: 16px; background: var(--card-bg); border: 2px solid var(--border); border-radius: var(--radius-md); transition: var(--transition-ease);" id="autoRefreshContainer">
+                                <div style="display: flex; align-items: center; gap: 16px; padding: 16px; background: var(--card-bg); border: 2px solid var(--border); border-radius: var(--radius-md); transition: var(--transition-ease);"
+                                    id="autoRefreshContainer">
                                     <div style="flex: 1;">
                                         <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
-                                            <svg class="icon" style="width: 20px; height: 20px; color: var(--primary);"><use xlink:href="#icon-refresh"></use></svg>
-                                            <label style="font-size: 16px; font-weight: 600; color: var(--text-main); cursor: pointer; margin: 0;" for="autoRefreshCookie">启用自动刷新 Cookie</label>
+                                            <svg class="icon" style="width: 20px; height: 20px; color: var(--primary);">
+                                                <use xlink:href="#icon-refresh"></use>
+                                            </svg>
+                                            <label
+                                                style="font-size: 16px; font-weight: 600; color: var(--text-main); cursor: pointer; margin: 0;"
+                                                for="autoRefreshCookie">启用自动刷新 Cookie</label>
                                         </div>
-                                        <small style="display: block; color: var(--text-muted); margin-left: 32px;">启用后，系统将每2小时自动检查并刷新过期的 Cookie（需要安装 Playwright: pip install playwright && playwright install chromium）</small>
+                                        <small
+                                            style="display: block; color: var(--text-muted); margin-left: 32px;">启用后，系统将根据设定的间隔自动检查并刷新过期的
+                                            Cookie（需要安装 Playwright: pip install playwright && playwright install
+                                            chromium）</small>
                                     </div>
-                                    <label class="toggle-switch" for="autoRefreshCookie" style="position: relative; display: inline-block; width: 56px; height: 32px; cursor: pointer; flex-shrink: 0;">
-                                        <input type="checkbox" id="autoRefreshCookie" onchange="toggleAutoRefresh()" style="opacity: 0; width: 0; height: 0;">
+                                    <label class="toggle-switch" for="autoRefreshCookie"
+                                        style="position: relative; display: inline-block; width: 56px; height: 32px; cursor: pointer; flex-shrink: 0;">
+                                        <input type="checkbox" id="autoRefreshCookie" onchange="toggleAutoRefresh()"
+                                            style="opacity: 0; width: 0; height: 0;">
                                         <span class="toggle-slider"></span>
                                     </label>
                                 </div>
-                                <div id="autoRefreshStatus" style="margin-top: 12px; padding: 12px; background: var(--hover-bg); border-radius: var(--radius-sm); display: none;">
+                                <div class="form-group" style="margin-top: 12px;" id="autoRefreshIntervalContainer">
+                                    <label class="form-label" for="autoRefreshInterval">检查间隔（小时）</label>
+                                    <div style="display: flex; align-items: center; gap: 12px;">
+                                        <input type="number" class="form-input" id="autoRefreshInterval" min="1"
+                                            max="24" value="2" style="width: 100px;">
+                                        <small style="color: var(--text-muted);">每隔多少小时检查一次过期的 Cookie（1-24 小时）</small>
+                                    </div>
+                                </div>
+                                <div id="autoRefreshStatus"
+                                    style="margin-top: 12px; padding: 12px; background: var(--hover-bg); border-radius: var(--radius-sm); display: none;">
                                     <div style="display: flex; align-items: center; gap: 8px;">
                                         <span id="autoRefreshStatusText"></span>
                                     </div>
+                                </div>
+                                <div style="margin-top: 12px;">
+                                    <button type="button" class="btn btn-primary"
+                                        onclick="saveAutoRefreshSettings()">保存刷新设置</button>
                                 </div>
                             </div>
                         </div>
 
                         <div class="settings-section">
-                            <h3><svg class="icon" style="width: 1em; height: 1em; vertical-align: -2px; margin-right: 8px;"><use xlink:href="#icon-server"></use></svg>服务信息</h3>
+                            <h3><svg class="icon"
+                                    style="width: 1em; height: 1em; vertical-align: -2px; margin-right: 8px;">
+                                    <use xlink:href="#icon-server"></use>
+                                </svg>服务信息</h3>
                             <div class="form-row">
                                 <div class="form-group">
                                     <label class="form-label">服务端口</label>
@@ -335,19 +498,20 @@
                                 </div>
                                 <div class="form-group">
                                     <label class="form-label">API地址</label>
-                                    <input type="text" class="form-input" id="apiUrl" value="http://localhost:8000/v1" disabled>
+                                    <input type="text" class="form-input" id="apiUrl" value="http://localhost:8000/v1"
+                                        disabled>
                                 </div>
                             </div>
                         </div>
 
                         <div class="settings-section">
                             <h3>配置文件</h3>
-                             <div class="form-group">
+                            <div class="form-group">
                                 <label class="form-label" for="configJson">当前配置 (JSON)</label>
                                 <textarea class="form-textarea" id="configJson" rows="15" readonly></textarea>
                                 <small>配置文件路径: business_gemini_session.json</small>
                             </div>
-                             <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                            <div style="display: flex; gap: 12px; flex-wrap: wrap;">
                                 <button type="button" class="btn btn-outline" onclick="refreshConfig()">
                                     刷新配置
                                 </button>
@@ -357,7 +521,8 @@
                                 <button type="button" class="btn btn-primary" onclick="uploadConfig()">
                                     导入配置
                                 </button>
-                                <input type="file" id="configFileInput" accept=".json" style="display: none;" onchange="handleConfigUpload(event)">
+                                <input type="file" id="configFileInput" accept=".json" style="display: none;"
+                                    onchange="handleConfigUpload(event)">
                             </div>
                         </div>
                     </form>
@@ -370,11 +535,14 @@
             <div class="card">
                 <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
                     <div class="card-title" style="display:flex; align-items:center; gap:8px;">
-                        <svg class="icon card-title-icon"><use xlink:href="#icon-key"></use></svg>
+                        <svg class="icon card-title-icon">
+                            <use xlink:href="#icon-key"></use>
+                        </svg>
                         API 密钥管理
                     </div>
                     <div class="token-actions">
-                        <button class="btn btn-primary" type="button" onclick="openCreateApiKeyModal()">创建 API 密钥</button>
+                        <button class="btn btn-primary" type="button" onclick="openCreateApiKeyModal()">创建 API
+                            密钥</button>
                         <button class="btn btn-outline" type="button" onclick="loadApiKeys()">刷新列表</button>
                     </div>
                 </div>
@@ -398,10 +566,13 @@
             <div class="modal-body">
                 <div class="form-group">
                     <label class="form-label" for="newAccountJson">粘贴账号JSON（可直接复制工具输出）</label>
-                    <textarea class="form-textarea" id="newAccountJson" placeholder='{"team_id":"...","secure_c_ses":"...","host_c_oses":"...","csesidx":"...","user_agent":"..."}' rows="4"></textarea>
+                    <textarea class="form-textarea" id="newAccountJson"
+                        placeholder='{"team_id":"...","secure_c_ses":"...","host_c_oses":"...","csesidx":"...","user_agent":"..."}'
+                        rows="4"></textarea>
                     <div style="display:flex; gap:8px; margin-top:8px;">
                         <button class="btn btn-outline btn-sm" type="button" onclick="parseAccountJson()">解析填充</button>
-                        <button class="btn btn-outline btn-sm" type="button" onclick="pasteAccountJson()">从剪贴板读取并填充</button>
+                        <button class="btn btn-outline btn-sm" type="button"
+                            onclick="pasteAccountJson()">从剪贴板读取并填充</button>
                     </div>
                 </div>
                 <div class="form-group">
@@ -410,11 +581,13 @@
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="newSecureCses">Cookie中的__Secure-C_SES</label>
-                    <textarea class="form-textarea" id="newSecureCses" placeholder="输入Cookie中的__Secure-C_SES" rows="3"></textarea>
+                    <textarea class="form-textarea" id="newSecureCses" placeholder="输入Cookie中的__Secure-C_SES"
+                        rows="3"></textarea>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="newHostCoses">Cookie中的__Host-C_OSES</label>
-                    <textarea class="form-textarea" id="newHostCoses" placeholder="输入Cookie中的__Host-C_OSES" rows="3"></textarea>
+                    <textarea class="form-textarea" id="newHostCoses" placeholder="输入Cookie中的__Host-C_OSES"
+                        rows="3"></textarea>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="newCsesidx">CSESIDX</label>
@@ -446,7 +619,8 @@
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="editSecureCses">Cookie中的__Secure-C_SES</label>
-                    <textarea class="form-textarea" id="editSecureCses" placeholder="输入Secure C Ses" rows="3"></textarea>
+                    <textarea class="form-textarea" id="editSecureCses" placeholder="输入Secure C Ses"
+                        rows="3"></textarea>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="editHostCoses">Cookie中的__Host-C_OSES</label>
@@ -466,8 +640,10 @@
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="editTempmailUrl">临时邮箱 URL</label>
-                    <textarea class="form-textarea" id="editTempmailUrl" placeholder="输入临时邮箱 URL（用于自动刷新，包含 JWT token）" rows="2"></textarea>
-                    <small style="color: var(--text-muted); font-size: 11px;">例如: https://tempmail.example.com/?jwt=...</small>
+                    <textarea class="form-textarea" id="editTempmailUrl" placeholder="输入临时邮箱 URL（用于自动刷新，包含 JWT token）"
+                        rows="2"></textarea>
+                    <small style="color: var(--text-muted); font-size: 11px;">例如:
+                        https://tempmail.example.com/?jwt=...</small>
                 </div>
             </div>
             <div class="modal-footer">
@@ -488,12 +664,16 @@
                 <input type="hidden" id="refreshAccountId">
                 <p class="text-muted" style="margin-bottom: 16px;">请输入新的Cookie值来刷新账号认证信息。刷新后将清除JWT缓存。</p>
                 <div class="form-group">
-                    <label class="form-label" for="refreshSecureCses">Cookie中的__Secure-C_SES <span style="color: var(--danger);">*</span></label>
-                    <textarea class="form-textarea" id="refreshSecureCses" placeholder="输入新的__Secure-C_SES值" rows="3"></textarea>
+                    <label class="form-label" for="refreshSecureCses">Cookie中的__Secure-C_SES <span
+                            style="color: var(--danger);">*</span></label>
+                    <textarea class="form-textarea" id="refreshSecureCses" placeholder="输入新的__Secure-C_SES值"
+                        rows="3"></textarea>
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="refreshHostCoses">Cookie中的__Host-C_OSES <span style="color: var(--danger);">*</span></label>
-                    <textarea class="form-textarea" id="refreshHostCoses" placeholder="输入新的__Host-C_OSES值" rows="3"></textarea>
+                    <label class="form-label" for="refreshHostCoses">Cookie中的__Host-C_OSES <span
+                            style="color: var(--danger);">*</span></label>
+                    <textarea class="form-textarea" id="refreshHostCoses" placeholder="输入新的__Host-C_OSES值"
+                        rows="3"></textarea>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="refreshCsesidx">CSESIDX (可选)</label>
@@ -501,13 +681,16 @@
                 </div>
                 <div class="form-group">
                     <label class="form-label">从JSON粘贴 (可选)</label>
-                    <textarea class="form-textarea" id="refreshCookieJson" placeholder="粘贴Cookie JSON数据" rows="3"></textarea>
-                    <button class="btn btn-outline" style="margin-top: 8px;" onclick="pasteRefreshCookieJson()">📋 粘贴并解析</button>
+                    <textarea class="form-textarea" id="refreshCookieJson" placeholder="粘贴Cookie JSON数据"
+                        rows="3"></textarea>
+                    <button class="btn btn-outline" style="margin-top: 8px;" onclick="pasteRefreshCookieJson()">📋
+                        粘贴并解析</button>
                 </div>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-outline" onclick="closeModal('refreshCookieModal')">取消</button>
-                <button class="btn btn-outline" onclick="autoRefreshAccountCookie()" id="autoRefreshBtn" style="display: none;">自动刷新</button>
+                <button class="btn btn-outline" onclick="autoRefreshAccountCookie()" id="autoRefreshBtn"
+                    style="display: none;">自动刷新</button>
                 <button class="btn btn-primary" onclick="refreshAccountCookie()">手动刷新</button>
             </div>
         </div>
@@ -537,7 +720,8 @@
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="newApiModelId">API模型ID（可选）</label>
-                    <input type="text" class="form-input" id="newApiModelId" placeholder="实际的Gemini API模型ID，如: gemini-3-pro-preview">
+                    <input type="text" class="form-input" id="newApiModelId"
+                        placeholder="实际的Gemini API模型ID，如: gemini-3-pro-preview">
                     <small class="text-muted">如果不设置，将使用上面的模型ID</small>
                 </div>
                 <div class="form-row">
@@ -604,7 +788,8 @@
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="editApiModelId">API模型ID（可选）</label>
-                    <input type="text" class="form-input" id="editApiModelId" placeholder="实际的Gemini API模型ID，如: gemini-3-pro-preview">
+                    <input type="text" class="form-input" id="editApiModelId"
+                        placeholder="实际的Gemini API模型ID，如: gemini-3-pro-preview">
                     <small class="text-muted">如果不设置，将使用上面的模型ID</small>
                 </div>
                 <div class="form-row">
@@ -633,7 +818,7 @@
     <div class="toast" id="toast"></div>
 
     <script src="{{ url_for('static', filename='js/index.js') }}"></script>
-    
+
 
     <!-- 创建 API 密钥模态框 -->
     <div class="modal" id="createApiKeyModal">
@@ -702,4 +887,5 @@
     </div>
 
 </body>
+
 </html>

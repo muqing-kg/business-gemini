@@ -671,12 +671,17 @@ def register_routes(app):
                         created_ts = int(time.time())
                         
                         # 使用真正的流式生成器
+                        # 获取思考过程配置
+                        show_thinking = account_manager.config.get("show_thinking_process", False)
+                        thinking_mode = account_manager.config.get("thinking_output_mode", "html")
+                        
                         stream_generator = stream_chat_realtime_generator(
                             jwt, session, user_message, proxy, team_id, 
                             gemini_file_ids, api_model_id, account_manager, 
                             account_idx, request_quota_type,
                             chat_id=chat_id, created=created_ts, model_name=requested_model,
-                            host_url=request.host_url
+                            host_url=request.host_url,
+                            show_thinking=show_thinking, thinking_mode=thinking_mode
                         )
                         successful_account_idx = account_idx
                         # 流式响应将在下面的 if stream 块中处理
@@ -762,7 +767,7 @@ def register_routes(app):
                 
                 def generate():
                     try:
-                        # 使用真正的流式生成器，实时转发
+                        # 使用真正的流式生成器，实时转发 SSE 格式
                         for chunk in stream_generator:
                             yield chunk
                         
@@ -782,8 +787,8 @@ def register_routes(app):
                                 "finish_reason": "stop"
                             }]
                         }
-                        yield f"{json.dumps(end_chunk, ensure_ascii=False)}\n"
-                        yield "[DONE]\n"
+                        yield f"data: {json.dumps(end_chunk, ensure_ascii=False)}\n\n"
+                        yield "data: [DONE]\n\n"
                     except Exception as e:
                         # 错误处理
                         error_chunk = {
@@ -798,8 +803,8 @@ def register_routes(app):
                             }],
                             "error": {"message": str(e)}
                         }
-                        yield f"{json.dumps(error_chunk, ensure_ascii=False)}\n"
-                        yield "[DONE]\n"
+                        yield f"data: {json.dumps(error_chunk, ensure_ascii=False)}\n\n"
+                        yield "data: [DONE]\n\n"
                 
                 # 对于流式响应，在开始时就记录日志
                 response_time = int((time.time() - request_start_time) * 1000)
@@ -818,7 +823,7 @@ def register_routes(app):
                 except Exception:
                     pass
                 
-                return Response(generate(), mimetype='application/x-ndjson')
+                return Response(generate(), mimetype='text/event-stream')
             
             # 非流式模式：使用原来的逻辑
             if chat_response is None:
@@ -856,7 +861,7 @@ def register_routes(app):
                                             "finish_reason": None
                                         }]
                                     }
-                                    yield f"{json.dumps(chunk, ensure_ascii=False)}\n"
+                                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
                         
                         # 然后发送图片/视频部分
                         # 注意：流式响应中 delta.content 必须是字符串，不能是对象
@@ -879,7 +884,7 @@ def register_routes(app):
                                         "finish_reason": None
                                     }]
                                 }
-                                yield f"{json.dumps(image_chunk, ensure_ascii=False)}\n"
+                                yield f"data: {json.dumps(image_chunk, ensure_ascii=False)}\n\n"
                     else:
                         # 纯文本，分块发送
                         if response_content and response_content.strip():
@@ -896,7 +901,7 @@ def register_routes(app):
                                         "finish_reason": None
                                     }]
                                 }
-                                yield f"{json.dumps(chunk, ensure_ascii=False)}\n"
+                                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
                     
                     # 发送结束标记
                     end_chunk = {
@@ -910,8 +915,8 @@ def register_routes(app):
                             "finish_reason": "stop"
                         }]
                     }
-                    yield f"{json.dumps(end_chunk, ensure_ascii=False)}\n"
-                    yield "[DONE]\n"
+                    yield f"data: {json.dumps(end_chunk, ensure_ascii=False)}\n\n"
+                    yield "data: [DONE]\n\n"
                 
                 # 对于流式响应，在开始时就记录日志（响应大小无法准确计算）
                 response_time = int((time.time() - request_start_time) * 1000)
@@ -930,7 +935,7 @@ def register_routes(app):
                 except Exception:
                     pass  # 日志记录失败不应影响主流程
 
-                return Response(generate(), mimetype='application/x-ndjson')
+                return Response(generate(), mimetype='text/event-stream')
             else:
                 # 非流式响应：response_content 可能是字符串或数组
                 response = {
@@ -1874,10 +1879,29 @@ def register_routes(app):
                 account_manager.config["upload_retention_days"] = 7
         if "auto_refresh_cookie" in data:
             account_manager.config["auto_refresh_cookie"] = bool(data["auto_refresh_cookie"])
+        if "auto_refresh_interval" in data:
+            try:
+                interval = int(data["auto_refresh_interval"])
+                # 限制范围 1-24 小时
+                interval = max(1, min(24, interval))
+                account_manager.config["auto_refresh_interval"] = interval
+                print(f"[配置更新] Cookie 自动刷新间隔已设置为 {interval} 小时")
+            except (ValueError, TypeError):
+                account_manager.config["auto_refresh_interval"] = 2  # 默认 2 小时
+                print("[配置更新] Cookie 自动刷新间隔设置无效，已重置为 2 小时")
         if "tempmail_worker_url" in data:
             account_manager.config["tempmail_worker_url"] = data["tempmail_worker_url"] or None
         if "chat_stream_enabled" in data:
-            account_manager.config["chat_stream_enabled"] = bool(data["chat_stream_enabled"]) 
+            account_manager.config["chat_stream_enabled"] = bool(data["chat_stream_enabled"])
+        # 思考过程配置
+        if "show_thinking_process" in data:
+            account_manager.config["show_thinking_process"] = bool(data["show_thinking_process"])
+            print(f"[配置] 保存 show_thinking_process = {account_manager.config['show_thinking_process']}")
+        if "thinking_output_mode" in data:
+            mode = data["thinking_output_mode"]
+            if mode in ("html", "reasoning_content"):
+                account_manager.config["thinking_output_mode"] = mode
+                print(f"[配置] 保存 thinking_output_mode = {mode}")
         if "log_level" in data:
             try:
                 set_log_level(data["log_level"], persist=True)
