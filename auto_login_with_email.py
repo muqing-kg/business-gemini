@@ -72,6 +72,52 @@ def simulate_human_behavior(page):
     except Exception:
         pass  # 忽略模拟行为中的错误
 
+
+def inject_stealth_script(page):
+    """注入指纹混淆脚本，隐藏自动化特征
+    
+    参考 test_band-main 项目的 _inject_fingerprint_script 实现。
+    通过覆盖 navigator.webdriver 等属性，降低被检测为自动化的风险。
+    """
+    script = '''
+    // 隐藏 webdriver 特征
+    Object.defineProperty(navigator, 'webdriver', {
+        get: () => undefined
+    });
+    
+    // 模拟真实浏览器的插件列表
+    Object.defineProperty(navigator, 'plugins', {
+        get: () => [1, 2, 3, 4, 5]
+    });
+    
+    // 设置语言列表
+    Object.defineProperty(navigator, 'languages', {
+        get: () => ['zh-CN', 'zh', 'en']
+    });
+    
+    // 添加 Chrome runtime 对象
+    if (!window.chrome) {
+        window.chrome = {};
+    }
+    window.chrome.runtime = {};
+    
+    // 覆盖 permissions
+    const originalQuery = window.navigator.permissions.query;
+    window.navigator.permissions.query = (parameters) => (
+        parameters.name === 'notifications'
+            ? Promise.resolve({ state: Notification.permission })
+            : originalQuery(parameters)
+    );
+    '''
+    try:
+        page.evaluate(script)
+        # 调试日志已关闭
+        # print("[反侦查] ✓ 已注入指纹混淆脚本")
+    except Exception as e:
+        # 如果注入失败，继续执行（某些页面可能不支持）
+        # print(f"[反侦查] ⚠ 注入脚本失败: {e}")
+        pass
+
 # 注意：这个脚本需要使用 chrome-mcp 工具
 # 由于无法直接调用 chrome-mcp，这里提供使用 Playwright 的实现
 # 实际使用时可以通过 chrome-mcp 的 API 调用
@@ -1487,57 +1533,25 @@ def login_with_email_and_code(page, email: str, code: str) -> bool:
         print("[登录] ✗ 未找到验证码输入框")
         return False
     
-    # 填写验证码并验证
+    # 填写验证码
     code_input.fill(code)
-    page.wait_for_timeout(500)
+    # 调试日志已关闭
+    # print(f"[登录] ✓ 已填写验证码: {code}")
+    page.wait_for_timeout(2000)
     
-    # 验证输入是否成功
-    actual_value = code_input.input_value()
-    if actual_value == code:
-        print(f"[登录] ✓ 已填写验证码: {code}")
-    else:
-        print(f"[登录] ⚠ 验证码填写可能失败 (期望: {code}, 实际: {actual_value})")
-        # 重试一次
-        code_input.clear()
-        page.wait_for_timeout(300)
-        code_input.fill(code)
-        page.wait_for_timeout(500)
-        actual_value = code_input.input_value()
-        if actual_value == code:
-            print(f"[登录] ✓ 重试填写验证码成功: {code}")
-        else:
-            print(f"[登录] ✗ 验证码填写失败")
-    
-    page.wait_for_timeout(1500)
     
     # 点击验证按钮
-    button_clicked = False
     try:
         verify_btn = page.locator("button:has-text('Verify'), button:has-text('验证'), button:has-text('Continue')").first
-        if verify_btn.count() > 0 and verify_btn.is_visible():
-            # 记录点击前的 URL
-            url_before = page.url
+        if verify_btn.is_visible():
             verify_btn.click()
-            page.wait_for_timeout(1000)
-            # 验证点击是否生效（URL 变化或页面状态变化）
-            url_after = page.url
-            if url_before != url_after:
-                print(f"[登录] ✓ 已点击验证按钮 (页面已跳转)")
-                button_clicked = True
-            else:
-                # URL 没变化，检查按钮是否还可见（可能正在加载）
-                print(f"[登录] ✓ 已点击验证按钮 (等待响应...)")
-                button_clicked = True
-            page.wait_for_timeout(2000)
-        else:
-            print("[登录] ⚠ 验证按钮不可见")
-    except Exception as e:
-        print(f"[登录] ⚠ 点击验证按钮时出错: {e}")
-    
-    if not button_clicked:
-        print("[登录] ⚠ 未能点击验证按钮，尝试按 Enter...")
+            # 调试日志已关闭
+            # print("[登录] ✓ 已点击验证按钮")
+            page.wait_for_timeout(3000)  # 等待页面响应
+    except:
+        # 调试日志已关闭
+        # print("[登录] ⚠ 未找到验证按钮，尝试按 Enter...")
         code_input.press("Enter")
-        print("[登录] ✓ 已按 Enter 提交")
         page.wait_for_timeout(3000)
     
     # 检查是否有"验证码有误"或"验证码输入次数已超出上限"的错误提示

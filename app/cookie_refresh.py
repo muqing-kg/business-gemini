@@ -156,6 +156,13 @@ def refresh_cookie_with_browser(account: dict, proxy: Optional[str] = None) -> O
             context = browser.new_context(**context_options)
             page = context.new_page()
             
+            # 注入指纹混淆脚本（降低被检测为自动化的风险）
+            try:
+                from auto_login_with_email import inject_stealth_script
+                inject_stealth_script(page)
+            except Exception:
+                pass  # 如果导入或注入失败，继续执行
+            
             try:
                 target_url = "https://business.gemini.google/"
                 
