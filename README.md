@@ -427,6 +427,7 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Accept: text/event-stream" \
   -d '{
     "model": "gemini-enterprise",
     "messages": [
@@ -435,6 +436,8 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
     "stream": true
   }'
 ```
+
+提示：也可省略请求体中的 `stream:true`，只需在请求头设置 `Accept: text/event-stream`，服务将返回流式 SSE；若未设置上述信号，则返回一次性 JSON。项目内部的“流式开关”已移除，是否流式完全由第三方客户端决定。
 
 ### 带图片对话
 

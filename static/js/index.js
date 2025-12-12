@@ -1066,7 +1066,7 @@ async function loadConfig() {
         }
         const streamEl = document.getElementById('chatStreamEnabled');
         if (streamEl) {
-            streamEl.checked = (configData.chat_stream_enabled !== false);
+            streamEl.checked = false;
         }
         // 思考过程配置
         const showThinkingEl = document.getElementById('showThinkingProcess');
@@ -1574,7 +1574,6 @@ async function saveSettings() {
                 auto_cleanup_enabled: autoCleanupEnabled,
                 upload_retention_days: uploadRetentionDays,
                 // image_output_mode 移除，改为后端自动检测
-                chat_stream_enabled: document.getElementById('chatStreamEnabled').checked,
                 // 思考过程配置
                 show_thinking_process: document.getElementById('showThinkingProcess').checked,
                 thinking_output_mode: document.getElementById('thinkingOutputMode').value,
@@ -1682,4 +1681,3 @@ document.querySelectorAll('.modal').forEach(modal => {
         }
     });
 });
-

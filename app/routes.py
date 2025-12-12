@@ -313,8 +313,30 @@ def register_routes(app):
             prompts = data.get('prompts', [])
             if 'stream' in data:
                 stream = bool(data.get('stream'))
+                decision_reason = 'body.stream=true' if stream else 'body.stream=false'
             else:
-                stream = bool(account_manager.config.get('chat_stream_enabled', True))
+                accept_header = (request.headers.get('Accept') or '').lower()
+                response_mode = (request.headers.get('Response-Mode') or '').lower()
+                header_map = {
+                    'X-Stream': (request.headers.get('X-Stream') or '').lower(),
+                    'Stream': (request.headers.get('Stream') or '').lower(),
+                    'OpenAI-Stream': (request.headers.get('OpenAI-Stream') or '').lower(),
+                    'Anthropic-Stream': (request.headers.get('Anthropic-Stream') or '').lower(),
+                }
+                flags_true = [k for k, v in header_map.items() if v in ('true', '1', 'yes', 'on')]
+                if 'text/event-stream' in accept_header:
+                    stream = True
+                    decision_reason = 'Accept=text/event-stream'
+                elif 'stream' in response_mode:
+                    stream = True
+                    decision_reason = 'Response-Mode=stream'
+                elif flags_true:
+                    stream = True
+                    decision_reason = f"{','.join(flags_true)}=true"
+                else:
+                    stream = False
+                    decision_reason = 'default-non-stream'
+                print(f"[判定] stream={stream} 来源={decision_reason} Accept={accept_header} Response-Mode={response_mode} Flags={header_map}")
             
             models_config = account_manager.config.get("models", [])
             selected_model_config = None
@@ -823,6 +845,7 @@ def register_routes(app):
                 except Exception:
                     pass
                 
+                print(f"[流式] 来源={decision_reason}，chat_id={chat_id}，model={requested_model}")
                 return Response(generate(), mimetype='text/event-stream')
             
             # 非流式模式：使用原来的逻辑
@@ -975,6 +998,7 @@ def register_routes(app):
                 except Exception:
                     pass  # 日志记录失败不应影响主流程
                 
+                print(f"[非流式] 来源={decision_reason}，model={requested_model}")
                 return jsonify(response)
 
         except Exception as e:
@@ -1255,6 +1279,9 @@ def register_routes(app):
             "quota_reset_date": None  # 保留用于向后兼容
         }
         account_manager.config["accounts"] = account_manager.accounts
+        with account_manager.lock:
+            if "chat_stream_enabled" in account_manager.config:
+                account_manager.config.pop("chat_stream_enabled", None)
         account_manager.save_config()
         
         # 推送账号更新事件
@@ -1891,8 +1918,6 @@ def register_routes(app):
                 print("[配置更新] Cookie 自动刷新间隔设置无效，已重置为 2 小时")
         if "tempmail_worker_url" in data:
             account_manager.config["tempmail_worker_url"] = data["tempmail_worker_url"] or None
-        if "chat_stream_enabled" in data:
-            account_manager.config["chat_stream_enabled"] = bool(data["chat_stream_enabled"])
         # 思考过程配置
         if "show_thinking_process" in data:
             account_manager.config["show_thinking_process"] = bool(data["show_thinking_process"])
